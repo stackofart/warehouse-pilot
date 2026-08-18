@@ -1,0 +1,20 @@
+{
+  "name": "Warehouse Pilot",
+  "short_name": "Warehouse",
+  "description": "Локальная оптимизация комплектации заказов на складе",
+  "lang": "ru",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f8f6",
+  "theme_color": "#14251f",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

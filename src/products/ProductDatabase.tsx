@@ -1,0 +1,369 @@
+import { Barcode, Boxes, CheckCircle2, Database, Download, FileJson, FileUp, ImagePlus, MapPin, PackagePlus, Pencil, Search, Trash2, WandSparkles, X } from 'lucide-react'
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from 'react'
+import { clearProducts, deleteProduct, listProducts, saveProduct, type Product } from './storage'
+import { simulateProductTechnicalData } from './simulation'
+import { createProductDocument, importProductDocument, parseProductDocument, productImportExample, productJsonSchema, type ProductConflict } from './transfer'
+
+type ProductForm = Pick<Product, 'sku' | 'barcode' | 'name' | 'location'> & {
+  unitsPerBox: string
+  itemLengthCm: string
+  itemWidthCm: string
+  itemHeightCm: string
+  itemWeightKg: string
+  boxLengthCm: string
+  boxWidthCm: string
+  boxHeightCm: string
+  boxWeightKg: string
+  maxTopLoadKg: string
+  rigidity: string
+  fragility: string
+  imageDataUrl: string
+}
+
+const emptyForm: ProductForm = {
+  sku: '',
+  barcode: '',
+  name: '',
+  location: '',
+  unitsPerBox: '',
+  itemLengthCm: '', itemWidthCm: '', itemHeightCm: '', itemWeightKg: '',
+  boxLengthCm: '', boxWidthCm: '', boxHeightCm: '', boxWeightKg: '', maxTopLoadKg: '',
+  rigidity: '', fragility: '', imageDataUrl: '',
+}
+
+function optionalNumber(value: string) {
+  const number = Number(value.replace(',', '.'))
+  return Number.isFinite(number) && number > 0 ? number : undefined
+}
+
+function productHasPackingData(product: Product) {
+  return Boolean(product.boxSpec?.lengthCm && product.boxSpec.widthCm && product.boxSpec.heightCm && product.boxSpec.weightKg && product.rigidity && product.fragility)
+}
+
+export function ProductDatabase() {
+  const [products, setProducts] = useState<Product[]>([])
+  const [form, setForm] = useState<ProductForm>(emptyForm)
+  const [editingId, setEditingId] = useState('')
+  const [query, setQuery] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [confirmAction, setConfirmAction] = useState<{ type: 'delete'; product: Product } | { type: 'clear' } | null>(null)
+  const [importConflicts, setImportConflicts] = useState<ProductConflict[]>([])
+
+  const refreshProducts = async () => {
+    setIsLoading(true)
+    try {
+      const storedProducts = await listProducts()
+      const missingEstimates = storedProducts.map(simulateProductTechnicalData).filter((value) => value !== null)
+      for (const input of missingEstimates) await saveProduct(input)
+      setProducts(missingEstimates.length ? await listProducts() : storedProducts)
+      if (missingEstimates.length) setMessage(`Автоматически добавлены оценочные характеристики: ${missingEstimates.length} товаров`)
+      setError('')
+    } catch (reason) {
+      console.error(reason)
+      setError('Не удалось открыть локальную базу товаров')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshProducts()
+  }, [])
+
+  const visibleProducts = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase()
+    if (!normalizedQuery) return products
+    return products.filter((product) =>
+      [product.sku, product.barcode, product.name, product.location]
+        .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)),
+    )
+  }, [products, query])
+
+  const updateForm = (field: keyof ProductForm, value: string) => {
+    setForm((current) => ({ ...current, [field]: value }))
+    setMessage('')
+    setError('')
+  }
+
+  const resetForm = () => {
+    setForm(emptyForm)
+    setEditingId('')
+    setMessage('')
+    setError('')
+  }
+
+  const submitProduct = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const product = {
+      sku: form.sku.replace(/\D/g, ''),
+      barcode: form.barcode.replace(/\D/g, ''),
+      name: form.name.trim(),
+      location: form.location.trim().toUpperCase(),
+      unitsPerBox: optionalNumber(form.unitsPerBox),
+      itemSpec: {
+        lengthCm: optionalNumber(form.itemLengthCm), widthCm: optionalNumber(form.itemWidthCm),
+        heightCm: optionalNumber(form.itemHeightCm), weightKg: optionalNumber(form.itemWeightKg),
+      },
+      boxSpec: {
+        lengthCm: optionalNumber(form.boxLengthCm), widthCm: optionalNumber(form.boxWidthCm),
+        heightCm: optionalNumber(form.boxHeightCm), weightKg: optionalNumber(form.boxWeightKg),
+        maxTopLoadKg: optionalNumber(form.maxTopLoadKg),
+      },
+      rigidity: optionalNumber(form.rigidity),
+      fragility: optionalNumber(form.fragility),
+      imageDataUrl: form.imageDataUrl || undefined,
+      technicalDataSource: 'manual' as const,
+    }
+
+    if (!product.sku || !product.barcode || !product.name || !product.location) {
+      setError('Заполните все четыре поля')
+      return
+    }
+    if (!/^\d{3,10}$/.test(product.sku)) {
+      setError('מק״ט должен содержать от 3 до 10 цифр')
+      return
+    }
+    if (!/^\d{8,14}$/.test(product.barcode)) {
+      setError('Штрихкод должен содержать от 8 до 14 цифр')
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      const result = await saveProduct({ ...product, id: editingId || undefined })
+      const estimate = simulateProductTechnicalData(result.product)
+      const finalProduct = estimate ? (await saveProduct(estimate)).product : result.product
+      setProducts((current) => [finalProduct, ...current.filter((item) => item.id !== finalProduct.id)])
+      setForm(emptyForm)
+      setEditingId('')
+      setError('')
+      setMessage(result.updated ? 'Карточка товара обновлена' : 'Товар добавлен в локальную базу')
+    } catch (reason) {
+      console.error(reason)
+      setError(reason instanceof Error ? reason.message : 'Не удалось сохранить товар')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const editProduct = (product: Product) => {
+    setForm({
+      sku: product.sku, barcode: product.barcode, name: product.name, location: product.location,
+      unitsPerBox: product.unitsPerBox?.toString() ?? '',
+      itemLengthCm: product.itemSpec?.lengthCm?.toString() ?? '', itemWidthCm: product.itemSpec?.widthCm?.toString() ?? '',
+      itemHeightCm: product.itemSpec?.heightCm?.toString() ?? '', itemWeightKg: product.itemSpec?.weightKg?.toString() ?? '',
+      boxLengthCm: product.boxSpec?.lengthCm?.toString() ?? '', boxWidthCm: product.boxSpec?.widthCm?.toString() ?? '',
+      boxHeightCm: product.boxSpec?.heightCm?.toString() ?? '', boxWeightKg: product.boxSpec?.weightKg?.toString() ?? '',
+      maxTopLoadKg: product.boxSpec?.maxTopLoadKg?.toString() ?? '', rigidity: product.rigidity?.toString() ?? '',
+      fragility: product.fragility?.toString() ?? '', imageDataUrl: product.imageDataUrl ?? '',
+    })
+    setEditingId(product.id)
+    setMessage('')
+    setError('')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const loadProductImage = (event: ChangeEvent<HTMLInputElement>) => {
+    const image = event.target.files?.[0]
+    event.target.value = ''
+    if (!image) return
+    if (image.size > 3 * 1024 * 1024) {
+      setError('Изображение товара должно быть меньше 3 МБ')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => updateForm('imageDataUrl', String(reader.result ?? ''))
+    reader.onerror = () => setError('Не удалось прочитать изображение товара')
+    reader.readAsDataURL(image)
+  }
+
+  const downloadJson = (filename: string, value: unknown) => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const simulateDimensions = async () => {
+    setIsSaving(true)
+    try {
+      const simulated = products.map(simulateProductTechnicalData).filter((value) => value !== null)
+      for (const input of simulated) await saveProduct(input)
+      await refreshProducts()
+      setMessage(simulated.length ? `Добавлены оценочные характеристики: ${simulated.length} товаров` : 'Нет подходящих товаров с пустыми характеристиками')
+      setError('')
+    } catch (reason) {
+      console.error(reason)
+      setError('Не удалось добавить оценочные характеристики')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const importJson = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setIsSaving(true)
+    try {
+      const result = await importProductDocument(products, parseProductDocument(await file.text()))
+      await refreshProducts()
+      setImportConflicts(result.conflicts)
+      setMessage(`Импортировано: ${result.imported}. Пропущено: ${result.skipped}.`)
+      setError('')
+    } catch (reason) {
+      console.error(reason)
+      setError(reason instanceof Error ? reason.message : 'Не удалось импортировать товары')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!confirmAction) return
+    setIsSaving(true)
+    try {
+      if (confirmAction.type === 'clear') {
+        await clearProducts()
+        setProducts([])
+        setMessage('База товаров очищена')
+      } else {
+        await deleteProduct(confirmAction.product.id)
+        setProducts((current) => current.filter((product) => product.id !== confirmAction.product.id))
+        setMessage('Товар удалён')
+        if (editingId === confirmAction.product.id) resetForm()
+      }
+      setConfirmAction(null)
+      setError('')
+    } catch (reason) {
+      console.error(reason)
+      setError('Не удалось удалить данные')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="page products-page">
+      <div className="page-heading products-heading">
+        <div>
+          <p className="eyebrow">СПРАВОЧНИК ТОВАРОВ</p>
+          <h1>Локальная база товаров</h1>
+          <p>Свяжите מק״ט и штрихкод с названием товара и его адресом на складе.</p>
+        </div>
+        <div className="product-count"><Database size={17} /><div><strong>{products.length}</strong><span>товаров сохранено</span></div></div>
+      </div>
+
+      <section className="product-tools" aria-label="Инструменты базы товаров">
+        <button className="secondary-button" type="button" disabled={isSaving} onClick={() => void simulateDimensions()}><WandSparkles size={15} />Симулировать габариты</button>
+        <label className="secondary-button product-import-button"><FileUp size={15} />Импорт JSON<input hidden type="file" accept="application/json,.json" onChange={importJson} /></label>
+        <button className="secondary-button" type="button" disabled={!products.length} onClick={() => downloadJson('warehouse-pilot-products.json', createProductDocument(products))}><Download size={15} />Экспорт товаров</button>
+        <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-products.schema.json', productJsonSchema)}><FileJson size={15} />JSON Schema</button>
+        <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-products.example.json', productImportExample)}><FileJson size={15} />Пример импорта</button>
+        <button className="danger-button" type="button" disabled={!products.length || isSaving} onClick={() => setConfirmAction({ type: 'clear' })}><Trash2 size={15} />Очистить базу</button>
+      </section>
+
+      <div className="products-layout">
+        <section className="product-form-card">
+          <div className="product-card-heading">
+            <span><PackagePlus size={20} /></span>
+            <div><p className="section-kicker">КАРТОЧКА ТОВАРА</p><h2>{editingId ? 'Редактировать товар' : 'Добавить товар'}</h2></div>
+          </div>
+
+          <form onSubmit={submitProduct}>
+            <label><span>מק״ט</span><input aria-label="מק״ט товара" inputMode="numeric" autoComplete="off" placeholder="Например, 1511" value={form.sku} onChange={(event) => updateForm('sku', event.target.value)} /></label>
+            <label><span>Штрихкод</span><input aria-label="Штрихкод товара" inputMode="numeric" autoComplete="off" placeholder="7290121920285" value={form.barcode} onChange={(event) => updateForm('barcode', event.target.value)} /></label>
+            <label className="product-name-field"><span>Название</span><input aria-label="Название товара" dir="auto" autoComplete="off" placeholder="Название товара" value={form.name} onChange={(event) => updateForm('name', event.target.value)} /></label>
+            <label><span>Адрес хранения</span><input aria-label="Адрес хранения товара" autoComplete="off" placeholder="23.F" value={form.location} onChange={(event) => updateForm('location', event.target.value.toUpperCase())} /></label>
+            <label><span>Штук в коробке</span><input aria-label="Штук товара в коробке" inputMode="numeric" placeholder="12" value={form.unitsPerBox} onChange={(event) => updateForm('unitsPerBox', event.target.value)} /></label>
+
+            <div className="product-spec-section">
+              <h3>Один товар</h3>
+              <div className="dimension-grid">
+                <label><span>Длина, см</span><input aria-label="Длина единицы товара" inputMode="decimal" value={form.itemLengthCm} onChange={(event) => updateForm('itemLengthCm', event.target.value)} /></label>
+                <label><span>Ширина, см</span><input aria-label="Ширина единицы товара" inputMode="decimal" value={form.itemWidthCm} onChange={(event) => updateForm('itemWidthCm', event.target.value)} /></label>
+                <label><span>Высота, см</span><input aria-label="Высота единицы товара" inputMode="decimal" value={form.itemHeightCm} onChange={(event) => updateForm('itemHeightCm', event.target.value)} /></label>
+                <label><span>Вес, кг</span><input aria-label="Вес единицы товара" inputMode="decimal" value={form.itemWeightKg} onChange={(event) => updateForm('itemWeightKg', event.target.value)} /></label>
+              </div>
+            </div>
+
+            <div className="product-spec-section">
+              <h3>Коробка целиком</h3>
+              <div className="dimension-grid">
+                <label><span>Длина, см</span><input aria-label="Длина коробки" inputMode="decimal" value={form.boxLengthCm} onChange={(event) => updateForm('boxLengthCm', event.target.value)} /></label>
+                <label><span>Ширина, см</span><input aria-label="Ширина коробки" inputMode="decimal" value={form.boxWidthCm} onChange={(event) => updateForm('boxWidthCm', event.target.value)} /></label>
+                <label><span>Высота, см</span><input aria-label="Высота коробки" inputMode="decimal" value={form.boxHeightCm} onChange={(event) => updateForm('boxHeightCm', event.target.value)} /></label>
+                <label><span>Вес, кг</span><input aria-label="Вес коробки" inputMode="decimal" value={form.boxWeightKg} onChange={(event) => updateForm('boxWeightKg', event.target.value)} /></label>
+                <label><span>Нагрузка сверху, кг</span><input aria-label="Допустимая нагрузка сверху" inputMode="decimal" value={form.maxTopLoadKg} onChange={(event) => updateForm('maxTopLoadKg', event.target.value)} /></label>
+              </div>
+            </div>
+
+            <div className="product-spec-section product-ratings">
+              <label><span>Жёсткость · 1–5</span><select aria-label="Жёсткость упаковки" value={form.rigidity} onChange={(event) => updateForm('rigidity', event.target.value)}><option value="">Не задано</option>{[1,2,3,4,5].map((value) => <option key={value}>{value}</option>)}</select></label>
+              <label><span>Хрупкость · 1–5</span><select aria-label="Хрупкость товара" value={form.fragility} onChange={(event) => updateForm('fragility', event.target.value)}><option value="">Не задано</option>{[1,2,3,4,5].map((value) => <option key={value}>{value}</option>)}</select></label>
+            </div>
+
+            <div className="product-image-field">
+              <span>Изображение товара</span>
+              <div>{form.imageDataUrl ? <img src={form.imageDataUrl} alt="Товар" /> : <ImagePlus size={24} />}<label className="secondary-button"><ImagePlus size={15} />{form.imageDataUrl ? 'Заменить' : 'Добавить'}<input hidden type="file" accept="image/*" onChange={loadProductImage} /></label>{form.imageDataUrl && <button className="icon-button" type="button" aria-label="Удалить изображение товара" onClick={() => updateForm('imageDataUrl', '')}><X size={15} /></button>}</div>
+            </div>
+
+            {error && <p className="product-form-error" role="alert">{error}</p>}
+            {message && <p className="product-form-success"><CheckCircle2 size={15} />{message}</p>}
+
+            <div className="product-form-actions">
+              <button className="primary-button" type="submit" disabled={isSaving}><PackagePlus size={17} />{isSaving ? 'Сохранение…' : editingId ? 'Сохранить изменения' : 'Добавить товар'}</button>
+              {editingId && <button className="secondary-button" type="button" onClick={resetForm}><X size={16} />Отмена</button>}
+            </div>
+          </form>
+        </section>
+
+        <section className="product-list-card">
+          <div className="product-list-heading">
+            <div><p className="section-kicker">БАЗА ДАННЫХ</p><h2>Сохранённые товары</h2></div>
+            <label className="product-search"><Search size={16} /><input aria-label="Поиск товаров" placeholder="Поиск по товару или адресу" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          </div>
+
+          {isLoading ? (
+            <div className="products-empty"><Database size={27} /><p>Загружаем локальную базу…</p></div>
+          ) : visibleProducts.length === 0 ? (
+            <div className="products-empty"><Boxes size={29} /><strong>{query ? 'Ничего не найдено' : 'База пока пуста'}</strong><p>{query ? 'Измените поисковый запрос.' : 'Добавьте первый товар с помощью формы.'}</p></div>
+          ) : (
+            <div className="products-table-wrap">
+              <table className="products-table">
+                <thead><tr><th>Фото</th><th>מק״ט</th><th>Штрихкод</th><th>Название</th><th>Упаковка</th><th>Адрес</th><th /></tr></thead>
+                <tbody>
+                  {visibleProducts.map((product) => (
+                    <tr key={product.id}>
+                      <td>{product.imageDataUrl ? <img className="product-thumb" src={product.imageDataUrl} alt="" /> : <span className="product-thumb-placeholder"><Boxes size={14} /></span>}</td>
+                      <td><b>{product.sku}</b></td>
+                      <td><span className="product-barcode"><Barcode size={14} />{product.barcode}</span></td>
+                      <td dir="auto">{product.name}</td>
+                      <td>{productHasPackingData(product) ? <span className="packing-ready">{product.technicalDataSource === 'simulated' ? 'Оценка' : 'Готово'}</span> : <span className="packing-missing">Нет габаритов</span>}</td>
+                      <td><span className="location-badge"><MapPin size={13} />{product.location}</span></td>
+                      <td><div className="table-product-actions"><button className="table-edit-button" type="button" aria-label={`Редактировать ${product.name}`} onClick={() => editProduct(product)}><Pencil size={15} /></button><button className="table-delete-button" type="button" aria-label={`Удалить ${product.name}`} onClick={() => setConfirmAction({ type: 'delete', product })}><Trash2 size={15} /></button></div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {confirmAction && <div className="modal-backdrop" role="presentation" onMouseDown={() => setConfirmAction(null)}><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" onMouseDown={(event) => event.stopPropagation()}><span className="modal-danger-icon"><Trash2 size={23} /></span><h2 id="delete-title">{confirmAction.type === 'clear' ? 'Удалить все товары?' : 'Удалить товар?'}</h2><p>{confirmAction.type === 'clear' ? `Будут безвозвратно удалены все ${products.length} карточек товаров. Сохранённые заказы останутся.` : <><b dir="auto">{confirmAction.product.name}</b> будет удалён из локальной базы.</>}</p><div><button className="secondary-button" type="button" onClick={() => setConfirmAction(null)}>Отмена</button><button className="danger-button" type="button" disabled={isSaving} onClick={() => void confirmDelete()}>{confirmAction.type === 'clear' ? 'Да, удалить все товары' : 'Да, удалить товар'}</button></div></section></div>}
+      {importConflicts.length > 0 && <div className="modal-backdrop" role="presentation" onMouseDown={() => setImportConflicts([])}><section className="import-result-modal" role="dialog" aria-modal="true" aria-labelledby="conflicts-title" onMouseDown={(event) => event.stopPropagation()}><div className="import-modal-heading"><div><AlertTriangleIcon /><span><h2 id="conflicts-title">Конфликты импорта</h2><p>מק״ט, штрихкод и название блокируют строку; общий адрес только предупреждает.</p></span></div><button className="icon-button" aria-label="Закрыть" onClick={() => setImportConflicts([])}><X size={16} /></button></div><div className="import-conflict-list">{importConflicts.map((conflict, index) => <div key={`${conflict.index}-${conflict.field}-${index}`} className={conflict.blocking ? 'blocking' : 'warning'}><b>{conflict.blocking ? 'Пропущено' : 'Добавлено с предупреждением'}</b><span>Строка {conflict.index + 1} · {conflict.field}: {conflict.value}</span><small dir="auto">{conflict.incomingName} ↔ {conflict.existingName}</small></div>)}</div><button className="primary-button" type="button" onClick={() => setImportConflicts([])}>Понятно</button></section></div>}
+    </div>
+  )
+}
+
+function AlertTriangleIcon() {
+  return <span className="modal-warning-icon">!</span>
+}

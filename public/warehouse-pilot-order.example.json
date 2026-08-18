@@ -1,0 +1,26 @@
+{
+  "schema": "warehouse-pilot.order",
+  "version": 1,
+  "order": {
+    "orderNumber": "SO26017112",
+    "customer": {
+      "name": "Название клиента",
+      "address": "Улица, дом",
+      "city": "Город",
+      "phone": "0520000000",
+      "customerNumber": "4527"
+    },
+    "items": [
+      {
+        "row": 1,
+        "address": "23.F",
+        "sku": "1511",
+        "barcode": "7290121920285",
+        "description": "Milka шоколад молочный 90 г",
+        "quantity": 48,
+        "unitsPerBox": 24,
+        "boxCount": 2
+      }
+    ]
+  }
+}
