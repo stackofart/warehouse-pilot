@@ -52,6 +52,7 @@ export function simulateProductTechnicalData(product: Product): ProductInput | n
     barcode: product.barcode,
     name: product.name,
     location: product.location,
+    description: product.description,
     unitsPerBox,
     itemSpec: { ...preset.itemSpec, ...product.itemSpec },
     boxSpec: {

@@ -8,14 +8,18 @@ export type ProductDocument = { schema: typeof PRODUCT_DOCUMENT_SCHEMA; version:
 export type ProductConflict = { index: number; field: 'sku' | 'barcode' | 'name' | 'location'; value: string; blocking: boolean; incomingName: string; existingName: string }
 
 const normalizeText = (value: string) => value.trim().toLocaleLowerCase()
-const clean = (product: ProductTransfer): ProductTransfer => ({
-  ...product,
-  sku: String(product.sku ?? '').replace(/\D/g, ''),
-  barcode: String(product.barcode ?? '').replace(/\D/g, ''),
-  name: String(product.name ?? '').trim(),
-  location: String(product.location ?? '').trim().toUpperCase(),
-  technicalDataSource: 'imported',
-})
+const clean = (product: ProductTransfer): ProductTransfer => {
+  const { description, ...rest } = product
+  return {
+    ...rest,
+    sku: String(product.sku ?? '').replace(/\D/g, ''),
+    barcode: String(product.barcode ?? '').replace(/\D/g, ''),
+    name: String(product.name ?? '').trim(),
+    location: String(product.location ?? '').trim().toUpperCase(),
+    ...(typeof description === 'string' ? { description: description.trim() } : {}),
+    technicalDataSource: 'imported',
+  }
+}
 
 export function createProductDocument(products: Product[]): ProductDocument {
   return {
@@ -33,6 +37,17 @@ export function parseProductDocument(text: string): ProductDocument {
   if (document.schema !== PRODUCT_DOCUMENT_SCHEMA || document.version !== PRODUCT_DOCUMENT_VERSION || !Array.isArray(document.products)) {
     throw new Error('Неподдерживаемая схема файла товаров')
   }
+  document.products.forEach((product, index) => {
+    if (!product || typeof product !== 'object' || Array.isArray(product)) {
+      throw new Error(`Товар ${index + 1} должен быть объектом`)
+    }
+    if ('description' in product && typeof product.description !== 'string') {
+      throw new Error(`Поле description у товара ${index + 1} должно быть строкой`)
+    }
+    if (typeof product.description === 'string' && product.description.length > 2000) {
+      throw new Error(`Поле description у товара ${index + 1} не должно превышать 2000 символов`)
+    }
+  })
   return document as ProductDocument
 }
 
@@ -82,7 +97,7 @@ export const productJsonSchema = {
   },
   '$defs': {
     physicalSpec: { type: 'object', properties: { lengthCm: { type: 'number', exclusiveMinimum: 0 }, widthCm: { type: 'number', exclusiveMinimum: 0 }, heightCm: { type: 'number', exclusiveMinimum: 0 }, weightKg: { type: 'number', exclusiveMinimum: 0 } } },
-    product: { type: 'object', required: ['sku', 'barcode', 'name', 'location'], properties: { sku: { type: 'string', pattern: '^\\d{3,10}$' }, barcode: { type: 'string', pattern: '^\\d{8,14}$' }, name: { type: 'string', minLength: 1 }, location: { type: 'string', minLength: 1 }, unitsPerBox: { type: 'number', exclusiveMinimum: 0 }, itemSpec: { '$ref': '#/$defs/physicalSpec' }, boxSpec: { allOf: [{ '$ref': '#/$defs/physicalSpec' }, { type: 'object', properties: { maxTopLoadKg: { type: 'number', exclusiveMinimum: 0 } } }] }, rigidity: { type: 'number', minimum: 1, maximum: 5 }, fragility: { type: 'number', minimum: 1, maximum: 5 }, imageDataUrl: { type: 'string' } } },
+    product: { type: 'object', required: ['sku', 'barcode', 'name', 'location'], properties: { sku: { type: 'string', pattern: '^\\d{3,10}$' }, barcode: { type: 'string', pattern: '^\\d{8,14}$' }, name: { type: 'string', minLength: 1 }, location: { type: 'string', minLength: 1 }, description: { type: 'string', maxLength: 2000, description: 'Необязательное подробное описание товара.' }, unitsPerBox: { type: 'number', exclusiveMinimum: 0 }, itemSpec: { '$ref': '#/$defs/physicalSpec' }, boxSpec: { allOf: [{ '$ref': '#/$defs/physicalSpec' }, { type: 'object', properties: { maxTopLoadKg: { type: 'number', exclusiveMinimum: 0 } } }] }, rigidity: { type: 'number', minimum: 1, maximum: 5 }, fragility: { type: 'number', minimum: 1, maximum: 5 }, imageDataUrl: { type: 'string' } } },
   },
 }
 
@@ -90,5 +105,5 @@ export const productImportExample: ProductDocument = {
   schema: PRODUCT_DOCUMENT_SCHEMA,
   version: PRODUCT_DOCUMENT_VERSION,
   exportedAt: new Date(0).toISOString(),
-  products: [{ sku: '1511', barcode: '7290121920285', name: 'Название товара', location: '23.F', unitsPerBox: 24, itemSpec: { lengthCm: 16, widthCm: 8, heightCm: 1, weightKg: .1 }, boxSpec: { lengthCm: 39, widthCm: 19, heightCm: 14, weightKg: 3.1, maxTopLoadKg: 25 }, rigidity: 3, fragility: 2 }],
+  products: [{ sku: '1511', barcode: '7290121920285', name: 'Название товара', location: '23.F', description: 'Необязательное описание: вкус, упаковка, особенности хранения и другие заметки.', unitsPerBox: 24, itemSpec: { lengthCm: 16, widthCm: 8, heightCm: 1, weightKg: .1 }, boxSpec: { lengthCm: 39, widthCm: 19, heightCm: 14, weightKg: 3.1, maxTopLoadKg: 25 }, rigidity: 3, fragility: 2 }],
 }

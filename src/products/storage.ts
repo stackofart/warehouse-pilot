@@ -7,6 +7,8 @@ export type Product = {
   barcode: string
   name: string
   location: string
+  /** Optional internal product description shown on demand in the catalogue. */
+  description?: string
   unitsPerBox?: number
   itemSpec?: PhysicalSpec
   boxSpec?: PhysicalSpec & { maxTopLoadKg?: number }
@@ -26,7 +28,7 @@ export type PhysicalSpec = {
 }
 
 export type ProductInput = Pick<Product, 'sku' | 'barcode' | 'name' | 'location'>
-  & Partial<Pick<Product, 'unitsPerBox' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource'>>
+  & Partial<Pick<Product, 'description' | 'unitsPerBox' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource'>>
   & { id?: string }
 
 export async function listProducts() {

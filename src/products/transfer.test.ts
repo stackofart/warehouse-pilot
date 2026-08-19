@@ -2,13 +2,39 @@ import { describe, expect, it } from 'vitest'
 import { analyzeProductImport, createProductDocument, parseProductDocument } from './transfer'
 import type { Product } from './storage'
 
-const saved: Product = { id: 'p1', sku: '1511', barcode: '7290121920285', name: 'Milka milk', location: '23.F', createdAt: '', updatedAt: '' }
+const saved: Product = { id: 'p1', sku: '1511', barcode: '7290121920285', name: 'Milka milk', location: '23.F', description: 'Молочный шоколад в коробке по 24 штуки.', createdAt: '', updatedAt: '' }
 
 describe('product JSON transfer', () => {
   it('exports a versioned portable document without local IDs', () => {
     const document = createProductDocument([saved])
     expect(parseProductDocument(JSON.stringify(document))).toMatchObject({ schema: 'warehouse-pilot.products', version: 1 })
     expect(document.products[0]).not.toHaveProperty('id')
+    expect(document.products[0]).toHaveProperty('description', saved.description)
+  })
+
+  it('accepts earlier imports without an optional description', () => {
+    const document = parseProductDocument(JSON.stringify({
+      schema: 'warehouse-pilot.products',
+      version: 1,
+      products: [{ sku: '1550', barcode: '7290121920520', name: 'Milka airy', location: '23.F' }],
+    }))
+    expect(document.products[0].description).toBeUndefined()
+  })
+
+  it('rejects a non-text product description', () => {
+    expect(() => parseProductDocument(JSON.stringify({
+      schema: 'warehouse-pilot.products',
+      version: 1,
+      products: [{ sku: '1550', barcode: '7290121920520', name: 'Milka airy', location: '23.F', description: 42 }],
+    }))).toThrow('description')
+  })
+
+  it('rejects an overly long product description', () => {
+    expect(() => parseProductDocument(JSON.stringify({
+      schema: 'warehouse-pilot.products',
+      version: 1,
+      products: [{ sku: '1550', barcode: '7290121920520', name: 'Milka airy', location: '23.F', description: 'x'.repeat(2001) }],
+    }))).toThrow('2000')
   })
 
   it('blocks duplicate sku, barcode or name', () => {

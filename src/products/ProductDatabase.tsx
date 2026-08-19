@@ -5,6 +5,7 @@ import { simulateProductTechnicalData } from './simulation'
 import { createProductDocument, importProductDocument, parseProductDocument, productImportExample, productJsonSchema, type ProductConflict } from './transfer'
 
 type ProductForm = Pick<Product, 'sku' | 'barcode' | 'name' | 'location'> & {
+  description: string
   unitsPerBox: string
   itemLengthCm: string
   itemWidthCm: string
@@ -25,6 +26,7 @@ const emptyForm: ProductForm = {
   barcode: '',
   name: '',
   location: '',
+  description: '',
   unitsPerBox: '',
   itemLengthCm: '', itemWidthCm: '', itemHeightCm: '', itemWeightKg: '',
   boxLengthCm: '', boxWidthCm: '', boxHeightCm: '', boxWeightKg: '', maxTopLoadKg: '',
@@ -45,6 +47,7 @@ export function ProductDatabase() {
   const [form, setForm] = useState<ProductForm>(emptyForm)
   const [editingId, setEditingId] = useState('')
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [expandedProductId, setExpandedProductId] = useState('')
   const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -78,7 +81,7 @@ export function ProductDatabase() {
     const normalizedQuery = query.trim().toLocaleLowerCase()
     if (!normalizedQuery) return products
     return products.filter((product) =>
-      [product.sku, product.barcode, product.name, product.location]
+      [product.sku, product.barcode, product.name, product.location, product.description ?? '']
         .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)),
     )
   }, [products, query])
@@ -104,6 +107,7 @@ export function ProductDatabase() {
       barcode: form.barcode.replace(/\D/g, ''),
       name: form.name.trim(),
       location: form.location.trim().toUpperCase(),
+      description: form.description.trim() || undefined,
       unitsPerBox: optionalNumber(form.unitsPerBox),
       itemSpec: {
         lengthCm: optionalNumber(form.itemLengthCm), widthCm: optionalNumber(form.itemWidthCm),
@@ -154,7 +158,7 @@ export function ProductDatabase() {
 
   const editProduct = (product: Product) => {
     setForm({
-      sku: product.sku, barcode: product.barcode, name: product.name, location: product.location,
+      sku: product.sku, barcode: product.barcode, name: product.name, location: product.location, description: product.description ?? '',
       unitsPerBox: product.unitsPerBox?.toString() ?? '',
       itemLengthCm: product.itemSpec?.lengthCm?.toString() ?? '', itemWidthCm: product.itemSpec?.widthCm?.toString() ?? '',
       itemHeightCm: product.itemSpec?.heightCm?.toString() ?? '', itemWeightKg: product.itemSpec?.weightKg?.toString() ?? '',
@@ -289,6 +293,7 @@ export function ProductDatabase() {
             <label><span>מק״ט</span><input aria-label="מק״ט товара" inputMode="numeric" autoComplete="off" placeholder="Например, 1511" value={form.sku} onChange={(event) => updateForm('sku', event.target.value)} /></label>
             <label><span>Штрихкод</span><input aria-label="Штрихкод товара" inputMode="numeric" autoComplete="off" placeholder="7290121920285" value={form.barcode} onChange={(event) => updateForm('barcode', event.target.value)} /></label>
             <label className="product-name-field"><span>Название</span><input aria-label="Название товара" dir="auto" autoComplete="off" placeholder="Название товара" value={form.name} onChange={(event) => updateForm('name', event.target.value)} /></label>
+            <label className="product-description-field"><span>Описание / примечание</span><textarea aria-label="Описание товара" dir="auto" autoComplete="off" maxLength={2000} placeholder="Короткое описание товара, особенности упаковки или комплектации" value={form.description} onChange={(event) => updateForm('description', event.target.value)} /></label>
             <label><span>Адрес хранения</span><input aria-label="Адрес хранения товара" autoComplete="off" placeholder="23.F" value={form.location} onChange={(event) => updateForm('location', event.target.value.toUpperCase())} /></label>
             <label><span>Штук в коробке</span><input aria-label="Штук товара в коробке" inputMode="numeric" placeholder="12" value={form.unitsPerBox} onChange={(event) => updateForm('unitsPerBox', event.target.value)} /></label>
 
@@ -335,7 +340,7 @@ export function ProductDatabase() {
 
         <section className="product-list-card">
           <div className="product-list-heading">
-            <div><p className="section-kicker">БАЗА ДАННЫХ</p><h2>Сохранённые товары</h2></div>
+            <div><p className="section-kicker">БАЗА ДАННЫХ</p><h2>Сохранённые товары</h2><p className="product-list-hint">Нажмите товар, чтобы открыть фото, описание и сведения об упаковке.</p></div>
             <label className="product-search"><Search size={16} /><input aria-label="Поиск товаров" placeholder="Поиск по товару или адресу" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           </div>
 
@@ -344,23 +349,35 @@ export function ProductDatabase() {
           ) : visibleProducts.length === 0 ? (
             <div className="products-empty"><Boxes size={29} /><strong>{query ? 'Ничего не найдено' : 'База пока пуста'}</strong><p>{query ? 'Измените поисковый запрос.' : 'Добавьте первый товар с помощью формы.'}</p></div>
           ) : (
-            <div className="products-table-wrap">
-              <table className="products-table">
-                <thead><tr><th>Фото</th><th>מק״ט</th><th>Штрихкод</th><th>Название</th><th>Упаковка</th><th>Адрес</th><th /></tr></thead>
-                <tbody>
-                  {visibleProducts.map((product) => (
-                    <tr key={product.id}>
-                      <td>{product.imageDataUrl ? <img className="product-thumb" src={product.imageDataUrl} alt="" /> : <span className="product-thumb-placeholder"><Boxes size={14} /></span>}</td>
-                      <td><b>{product.sku}</b></td>
-                      <td><span className="product-barcode"><Barcode size={14} />{product.barcode}</span></td>
-                      <td dir="auto">{product.name}</td>
-                      <td>{productHasPackingData(product) ? <span className="packing-ready">{product.technicalDataSource === 'simulated' ? 'Оценка' : 'Готово'}</span> : <span className="packing-missing">Нет габаритов</span>}</td>
-                      <td><span className="location-badge"><MapPin size={13} />{product.location}</span></td>
-                      <td><div className="table-product-actions"><button className="table-edit-button" type="button" aria-label={`Редактировать ${product.name}`} onClick={() => editProduct(product)}><Pencil size={15} /></button><button className="table-delete-button" type="button" aria-label={`Удалить ${product.name}`} onClick={() => setConfirmAction({ type: 'delete', product })}><Trash2 size={15} /></button></div></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="product-directory" role="list" aria-label="Сохранённые товары">
+              {visibleProducts.map((product) => {
+                const expanded = expandedProductId === product.id
+                return (
+                  <article className={`product-directory-item ${expanded ? 'expanded' : ''}`} key={product.id} role="listitem">
+                    <button className="product-directory-summary" type="button" aria-expanded={expanded} aria-controls={`product-extra-${product.id}`} onClick={() => setExpandedProductId((current) => current === product.id ? '' : product.id)}>
+                      <span className="product-directory-primary">
+                        <strong dir="auto">{product.name}</strong>
+                        <span className="location-badge"><MapPin size={14} />{product.location}</span>
+                      </span>
+                      <span className="product-directory-code product-directory-barcode"><small>Штрихкод</small><b><Barcode size={14} />{product.barcode}</b></span>
+                      <span className="product-directory-code"><small>מק״ט</small><b>{product.sku}</b></span>
+                      <span className="product-directory-packing">{productHasPackingData(product) ? <span className="packing-ready">{product.technicalDataSource === 'simulated' ? 'Оценка габаритов' : 'Габариты заданы'}</span> : <span className="packing-missing">Нет габаритов</span>}</span>
+                      <span className="product-directory-disclosure"><span>{expanded ? 'Скрыть' : 'Фото и описание'}</span>{expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</span>
+                    </button>
+
+                    {expanded && <div className="product-directory-details" id={`product-extra-${product.id}`}>
+                      <div className="product-detail-content">
+                        <div className="product-detail-image">{product.imageDataUrl ? <img src={product.imageDataUrl} alt={product.name} /> : <span><Boxes size={27} />Фото не добавлено</span>}</div>
+                        <div className="product-detail-description"><span>Описание</span><p dir="auto">{product.description?.trim() || 'Описание пока не добавлено.'}</p></div>
+                      </div>
+                      <div className="product-detail-footer">
+                        <div className="product-detail-facts"><span><b>{product.unitsPerBox ?? '—'}</b> шт. в коробке</span><span>{productHasPackingData(product) ? <><b>{product.boxSpec?.lengthCm}×{product.boxSpec?.widthCm}×{product.boxSpec?.heightCm} см</b> · {product.boxSpec?.weightKg} кг</> : 'Габариты ещё не заданы'}</span></div>
+                        <div className="table-product-actions"><button className="table-edit-button" type="button" aria-label={`Редактировать ${product.name}`} onClick={() => editProduct(product)}><Pencil size={16} />Редактировать</button><button className="table-delete-button" type="button" aria-label={`Удалить ${product.name}`} onClick={() => setConfirmAction({ type: 'delete', product })}><Trash2 size={16} />Удалить</button></div>
+                      </div>
+                    </div>}
+                  </article>
+                )
+              })}
             </div>
           )}
         </section>
