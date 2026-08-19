@@ -1,5 +1,7 @@
-import { Boxes, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Route } from 'lucide-react'
+import { Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Play, Route } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
+import { listFulfillmentSessions } from '../fulfillment/storage'
+import { getFulfillmentProgress, type FulfillmentSession } from '../fulfillment/workflow'
 import { listOrders, type SavedOrder } from './storage'
 import { importOrderDocument, orderImportExample, orderImportInstructions, OrderImportValidationError, orderJsonSchema, parseOrderDocument } from './transfer'
 
@@ -17,6 +19,7 @@ function formatDate(value: string) {
 
 export function OrdersDatabase() {
   const [orders, setOrders] = useState<SavedOrder[]>([])
+  const [sessions, setSessions] = useState<Map<string, FulfillmentSession>>(new Map())
   const [expandedId, setExpandedId] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isImporting, setIsImporting] = useState(false)
@@ -24,16 +27,17 @@ export function OrdersDatabase() {
   const [importIssues, setImportIssues] = useState<string[]>([])
   const [message, setMessage] = useState('')
 
-  const refreshOrders = async () => {
-    const saved = await listOrders()
+  const refreshData = async () => {
+    const [saved, savedSessions] = await Promise.all([listOrders(), listFulfillmentSessions()])
     setOrders(saved)
+    setSessions(new Map(savedSessions.map((session) => [session.orderId, session])))
     return saved
   }
 
   useEffect(() => {
     const load = async () => {
       try {
-        await refreshOrders()
+        await refreshData()
       } catch (reason) {
         console.error(reason)
         setError('Не удалось открыть локальную базу заказов')
@@ -72,7 +76,7 @@ export function OrdersDatabase() {
     try {
       const document = parseOrderDocument(await file.text())
       const result = await importOrderDocument(document, file.name, orders)
-      await refreshOrders()
+      await refreshData()
       setExpandedId(result.savedOrder.id)
       setMessage(`Заказ ${result.savedOrder.orderNumber} импортирован: ${result.savedOrder.items.length} позиций. Товаров добавлено или дополнено: ${result.products.saved}; пропущено: ${result.products.skipped}; конфликтов: ${result.products.conflicts}.`)
     } catch (reason) {
@@ -120,6 +124,8 @@ export function OrdersDatabase() {
           <div className="orders-list">
             {orders.map((order) => {
               const expanded = expandedId === order.id
+              const session = sessions.get(order.id)
+              const fulfillmentProgress = getFulfillmentProgress(session)
               return (
                 <article className={`order-card ${expanded ? 'expanded' : ''}`} key={order.id}>
                   <button className="order-card-summary" type="button" aria-expanded={expanded} onClick={() => setExpandedId(expanded ? '' : order.id)}>
@@ -159,7 +165,8 @@ export function OrdersDatabase() {
                         </table>
                       </div>
                       <p className="order-detail-note"><Boxes size={14} />Товары с заполненными מק״ט, штрихкодом, названием и адресом автоматически попадают в справочник «Товары» при сохранении заказа.</p>
-                      <a className="primary-button order-route-button" href={`#route/${encodeURIComponent(order.id)}`}><Route size={16} />Построить маршрут и паллету</a>
+                      {session && <div className={`order-workflow-progress ${session.status}`}><span>{session.status === 'completed' ? <CheckCircle2 size={15} /> : <Play size={15} />}<b>{session.status === 'completed' ? 'Комплектация завершена' : `В работе · ${fulfillmentProgress.percent}%`}</b></span><small>{fulfillmentProgress.picked} собрано · {fulfillmentProgress.missing} отсутствует · {fulfillmentProgress.pending} осталось</small></div>}
+                      <div className="order-detail-actions"><a className="secondary-button" href={`#route/${encodeURIComponent(order.id)}`}><Route size={16} />Расчёт маршрута</a><a className="primary-button" href={`#work/${encodeURIComponent(order.id)}`}><Play size={16} />{session?.status === 'completed' ? 'Открыть результат' : session ? 'Продолжить сборку' : 'Начать комплектацию'}</a></div>
                     </div>
                   )}
                 </article>

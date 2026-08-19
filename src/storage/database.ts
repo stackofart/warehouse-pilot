@@ -1,7 +1,8 @@
 export const DATABASE_NAME = 'warehouse-pilot'
-export const DATABASE_VERSION = 2
+export const DATABASE_VERSION = 3
 export const ORDERS_STORE = 'orders'
 export const PRODUCTS_STORE = 'products'
+export const FULFILLMENT_STORE = 'fulfillmentSessions'
 
 export function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -22,6 +23,12 @@ export function openDatabase() {
         products.createIndex('barcode', 'barcode', { unique: true })
         products.createIndex('location', 'location', { unique: false })
         products.createIndex('updatedAt', 'updatedAt', { unique: false })
+      }
+
+      if (!database.objectStoreNames.contains(FULFILLMENT_STORE)) {
+        const sessions = database.createObjectStore(FULFILLMENT_STORE, { keyPath: 'orderId' })
+        sessions.createIndex('status', 'status', { unique: false })
+        sessions.createIndex('updatedAt', 'updatedAt', { unique: false })
       }
     }
 
