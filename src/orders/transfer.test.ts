@@ -17,7 +17,14 @@ describe('order JSON import', () => {
     value.order.items[0].address = '23.f'
     const parsed = parseOrderDocument(JSON.stringify(value))
     expect(parsed.order.orderNumber).toBe('SO26017112')
+    expect(parsed.order.notes).toBe('Позвонить заказчику перед отгрузкой')
     expect(parsed.order.items[0]).toMatchObject({ address: '23.F', quantity: 48, unitsPerBox: 24, boxCount: 2 })
+  })
+
+  it('accepts old files without the optional notes field', () => {
+    const value = structuredClone(orderImportExample)
+    delete value.order.notes
+    expect(parseOrderDocument(JSON.stringify(value)).order.notes).toBe('')
   })
 
   it('rejects unknown fields so the format stays unambiguous', () => {

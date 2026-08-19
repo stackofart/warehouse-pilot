@@ -15,6 +15,15 @@ type WorkflowStop = {
 
 const timeFormatter = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' })
 
+function orderIdFromHash() {
+  const encodedId = window.location.hash.match(/^#(?:work|route)\/(.+)$/)?.[1] ?? ''
+  try {
+    return decodeURIComponent(encodedId)
+  } catch {
+    return ''
+  }
+}
+
 function formatTime(value: string | null | undefined) {
   return value ? timeFormatter.format(new Date(value)) : '—'
 }
@@ -56,7 +65,7 @@ function buildWorkflowStops(order: SavedOrder): { stops: WorkflowStop[]; totalDi
 }
 
 export function OrderWorkflow() {
-  const hashOrderId = decodeURIComponent(window.location.hash.slice('#work/'.length))
+  const hashOrderId = orderIdFromHash()
   const [orders, setOrders] = useState<SavedOrder[]>([])
   const [selectedId, setSelectedId] = useState(hashOrderId)
   const [session, setSession] = useState<FulfillmentSession | null>(null)
@@ -171,11 +180,17 @@ export function OrderWorkflow() {
   return (
     <div className="page workflow-page">
       <div className="page-heading workflow-heading">
-        <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>Комплектация заказа</h1><p>Следуйте маршруту по остановкам и отмечайте результат каждой позиции.</p></div>
+        <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>Заказ: маршрут и сборка</h1><p>Весь рабочий процесс в одном месте: маршрут, прогресс и отметки по товарам.</p></div>
         <label className="order-selector"><span>Заказ</span><select aria-label="Заказ для комплектации" value={order.id} onChange={(event) => selectOrder(event.target.value)}>{orders.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.orderNumber || 'Без номера'}</option>)}</select></label>
       </div>
 
       {error && <div className="order-import-feedback error workflow-error" role="alert">{error}</div>}
+
+      <nav className="workflow-order-navigation" aria-label="Разделы заказа">
+        <a className="secondary-button" href="#orders"><ClipboardList size={15} />Все заказы</a>
+        <span className="active"><Route size={15} />Маршрут и сборка</span>
+        <a className="secondary-button" href={`#pallet/${encodeURIComponent(order.id)}`}><Cuboid size={15} />Паллета</a>
+      </nav>
 
       <section className="workflow-overview">
         <div className="workflow-order-title"><span className={`workflow-status ${session?.status ?? 'not-started'}`}>{session?.status === 'completed' ? 'Завершён' : session ? 'В работе' : 'Не начат'}</span><h2>{order.orderNumber || 'Заказ без номера'}</h2><p dir="auto">{order.customer.name || 'Заказчик не указан'}</p></div>
@@ -185,13 +200,13 @@ export function OrderWorkflow() {
         {!session ? <button className="primary-button workflow-main-action" disabled={isSaving} onClick={() => void startOrder()}><Play size={17} />Начать заказ</button> : session.status === 'completed' ? <div className="workflow-completed-time"><Flag size={18} /><span><small>Завершён в</small><strong>{formatTime(session.completedAt)}</strong></span></div> : <button className="primary-button workflow-main-action" disabled={isSaving || progress.pending > 0} onClick={() => void finishOrder()}><Flag size={17} />Завершить заказ</button>}
       </section>
 
+      {order.notes && <section className="workflow-order-notes"><b>Примечание к заказу</b><p>{order.notes}</p></section>}
+
       <section className="workflow-progress-card">
         <div><span><b>{progress.handled}</b> из {order.items.length} позиций</span><strong>{session ? progress.percent : 0}%</strong></div>
         <div className="workflow-progress-track"><span style={{ width: `${session ? progress.percent : 0}%` }} /></div>
         <ul><li className="picked"><Check size={12} />Собрано: {progress.picked}</li><li className="missing"><PackageX size={12} />Отсутствует: {progress.missing}</li><li>Осталось: {session ? progress.pending : order.items.length}</li></ul>
       </section>
-
-      <div className="workflow-tools"><a className="secondary-button" href={`#route/${encodeURIComponent(order.id)}`}><Route size={15} />Расчёт и паллета</a><a className="secondary-button" href="#pallet"><Cuboid size={15} />3D-компоновка</a></div>
 
       {route?.routeWarning && <div className="optimization-warning workflow-route-warning"><AlertTriangle size={17} /><span>{route.routeWarning}. Такие позиции добавлены в конец как ручные остановки.</span></div>}
 

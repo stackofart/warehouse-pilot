@@ -1,4 +1,4 @@
-import { Barcode, Boxes, CheckCircle2, Database, Download, FileJson, FileUp, ImagePlus, MapPin, PackagePlus, Pencil, Search, Trash2, WandSparkles, X } from 'lucide-react'
+import { Barcode, Boxes, CheckCircle2, ChevronDown, ChevronUp, Database, Download, FileJson, FileUp, ImagePlus, MapPin, PackagePlus, Pencil, Search, Trash2, WandSparkles, X } from 'lucide-react'
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from 'react'
 import { clearProducts, deleteProduct, listProducts, saveProduct, type Product } from './storage'
 import { simulateProductTechnicalData } from './simulation'
@@ -44,6 +44,7 @@ export function ProductDatabase() {
   const [products, setProducts] = useState<Product[]>([])
   const [form, setForm] = useState<ProductForm>(emptyForm)
   const [editingId, setEditingId] = useState('')
+  const [isFormOpen, setIsFormOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -93,6 +94,7 @@ export function ProductDatabase() {
     setEditingId('')
     setMessage('')
     setError('')
+    setIsFormOpen(false)
   }
 
   const submitProduct = async (event: FormEvent<HTMLFormElement>) => {
@@ -139,6 +141,7 @@ export function ProductDatabase() {
       setProducts((current) => [finalProduct, ...current.filter((item) => item.id !== finalProduct.id)])
       setForm(emptyForm)
       setEditingId('')
+      setIsFormOpen(false)
       setError('')
       setMessage(result.updated ? 'Карточка товара обновлена' : 'Товар добавлен в локальную базу')
     } catch (reason) {
@@ -161,6 +164,7 @@ export function ProductDatabase() {
       fragility: product.fragility?.toString() ?? '', imageDataUrl: product.imageDataUrl ?? '',
     })
     setEditingId(product.id)
+    setIsFormOpen(true)
     setMessage('')
     setError('')
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -271,13 +275,17 @@ export function ProductDatabase() {
       </section>
 
       <div className="products-layout">
-        <section className="product-form-card">
-          <div className="product-card-heading">
+        <section className={`product-form-card ${isFormOpen ? 'open' : 'collapsed'}`}>
+          <button className="product-form-toggle" type="button" aria-expanded={isFormOpen} aria-controls="product-editor" onClick={() => setIsFormOpen((current) => !current)}>
             <span><PackagePlus size={20} /></span>
-            <div><p className="section-kicker">КАРТОЧКА ТОВАРА</p><h2>{editingId ? 'Редактировать товар' : 'Добавить товар'}</h2></div>
-          </div>
+            <div><p className="section-kicker">КАРТОЧКА ТОВАРА</p><h2>{editingId ? 'Редактировать товар' : 'Добавить товар'}</h2><small>{isFormOpen ? 'Свернуть форму' : 'Открыть форму добавления'}</small></div>
+            {isFormOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          </button>
 
-          <form onSubmit={submitProduct}>
+          {!isFormOpen && error && <p className="product-form-error product-form-collapsed-message" role="alert">{error}</p>}
+          {!isFormOpen && message && <p className="product-form-success product-form-collapsed-message"><CheckCircle2 size={15} />{message}</p>}
+
+          {isFormOpen && <form id="product-editor" onSubmit={submitProduct}>
             <label><span>מק״ט</span><input aria-label="מק״ט товара" inputMode="numeric" autoComplete="off" placeholder="Например, 1511" value={form.sku} onChange={(event) => updateForm('sku', event.target.value)} /></label>
             <label><span>Штрихкод</span><input aria-label="Штрихкод товара" inputMode="numeric" autoComplete="off" placeholder="7290121920285" value={form.barcode} onChange={(event) => updateForm('barcode', event.target.value)} /></label>
             <label className="product-name-field"><span>Название</span><input aria-label="Название товара" dir="auto" autoComplete="off" placeholder="Название товара" value={form.name} onChange={(event) => updateForm('name', event.target.value)} /></label>
@@ -322,7 +330,7 @@ export function ProductDatabase() {
               <button className="primary-button" type="submit" disabled={isSaving}><PackagePlus size={17} />{isSaving ? 'Сохранение…' : editingId ? 'Сохранить изменения' : 'Добавить товар'}</button>
               {editingId && <button className="secondary-button" type="button" onClick={resetForm}><X size={16} />Отмена</button>}
             </div>
-          </form>
+          </form>}
         </section>
 
         <section className="product-list-card">

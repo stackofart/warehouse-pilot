@@ -4,6 +4,7 @@ import { openDatabase, ORDERS_STORE, requestToPromise } from '../storage/databas
 export type SavedOrder = {
   id: string
   orderNumber: string
+  notes?: string
   customer: RecognizedCustomer
   items: RecognizedOrderItem[]
   rawText: string

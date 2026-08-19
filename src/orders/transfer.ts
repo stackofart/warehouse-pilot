@@ -23,6 +23,7 @@ export type OrderDocument = {
   version: typeof ORDER_DOCUMENT_VERSION
   order: {
     orderNumber: string
+    notes?: string
     customer: OrderCustomerTransfer
     items: OrderItemTransfer[]
   }
@@ -135,13 +136,15 @@ export function parseOrderDocument(text: string): OrderDocument {
 
   const orderValue = value.order
   let orderNumber = ''
+  let notes = ''
   let customer: OrderCustomerTransfer = { name: '', address: '', city: '', phone: '', customerNumber: '' }
   let items: OrderItemTransfer[] = []
   if (!isRecord(orderValue)) {
     issues.push('order: ожидается объект')
   } else {
-    checkExactKeys(orderValue, ['orderNumber', 'customer', 'items'], 'order', issues)
+    checkExactKeys(orderValue, ['orderNumber', 'notes', 'customer', 'items'], 'order', issues)
     orderNumber = requireText(orderValue.orderNumber, 'order.orderNumber', issues, { maxLength: 64 })
+    if ('notes' in orderValue) notes = requireText(orderValue.notes, 'order.notes', issues, { allowEmpty: true, maxLength: 2000 })
     customer = parseCustomer(orderValue.customer, issues)
     if (!Array.isArray(orderValue.items) || orderValue.items.length === 0) {
       issues.push('order.items: нужен непустой массив')
@@ -156,7 +159,7 @@ export function parseOrderDocument(text: string): OrderDocument {
   }
 
   if (issues.length) throw new OrderImportValidationError(issues)
-  return { schema: ORDER_DOCUMENT_SCHEMA, version: ORDER_DOCUMENT_VERSION, order: { orderNumber, customer, items } }
+  return { schema: ORDER_DOCUMENT_SCHEMA, version: ORDER_DOCUMENT_VERSION, order: { orderNumber, notes, customer, items } }
 }
 
 function toRecognizedItem(item: OrderItemTransfer): RecognizedOrderItem {
@@ -177,6 +180,7 @@ export async function importOrderDocument(document: OrderDocument, sourceFileNam
   const savedOrder = await saveOrder({
     id: crypto.randomUUID(),
     orderNumber: document.order.orderNumber,
+    notes: document.order.notes ?? '',
     customer: { ...document.order.customer, raw: '' },
     items,
     rawText: '',
@@ -226,6 +230,7 @@ export const orderJsonSchema = {
       type: 'object', additionalProperties: false, required: ['orderNumber', 'customer', 'items'],
       properties: {
         orderNumber: { type: 'string', minLength: 1, maxLength: 64 },
+        notes: { type: 'string', maxLength: 2000, description: 'Необязательное внутреннее примечание к заказу.' },
         customer: { '$ref': '#/$defs/customer' },
         items: { type: 'array', minItems: 1, items: { '$ref': '#/$defs/item' } },
       },
@@ -238,6 +243,7 @@ export const orderImportExample: OrderDocument = {
   version: ORDER_DOCUMENT_VERSION,
   order: {
     orderNumber: 'SO26017112',
+    notes: 'Позвонить заказчику перед отгрузкой',
     customer: { name: 'Название клиента', address: 'Улица, дом', city: 'Город', phone: '0520000000', customerNumber: '4527' },
     items: [
       { row: 1, address: '23.F', sku: '1511', barcode: '7290121920285', description: 'Milka шоколад молочный 90 г', quantity: 48, unitsPerBox: 24, boxCount: 2 },
@@ -259,13 +265,14 @@ ${JSON.stringify(orderImportExample, null, 2)}
 
 1. На верхнем уровне допустимы только \`schema\`, \`version\` и \`order\`.
 2. \`order.orderNumber\` — непустая строка, уникальная среди уже сохранённых заказов. Совпадение номера блокирует импорт.
-3. Объект \`customer\` и все пять его полей обязательны. Если сведений нет, передайте пустую строку \`""\`.
-4. \`items\` — непустой массив. \`row\` — уникальный положительный целый номер строки.
-5. Адрес записывается как \`ROW.SECTOR\`: номер ряда, точка и заглавная буква A–H, например \`23.F\`. Геометрическая доступность адреса проверяется отдельно при построении маршрута.
-6. \`sku\` (מק״ט) — строка из 3–10 цифр. \`barcode\` — строка GTIN-8/12/13/14 с корректной контрольной цифрой. Числовые коды нельзя передавать JSON-числами: это может удалить ведущие нули.
-7. \`quantity\` — общее количество единиц, \`unitsPerBox\` — единиц в коробке, \`boxCount\` — число коробок. Обязательно равенство \`quantity = unitsPerBox × boxCount\` с допуском 0,02.
-8. Неизвестные поля запрещены. Ошибочный файл целиком отклоняется и ничего не сохраняет.
-9. После успешного импорта заказ появляется в разделе «Заказы». Новые товары также добавляются в справочник по מק״ט/штрихкоду; существующие карточки товара импорт заказа не перезаписывает.
+3. \`order.notes\` — необязательное внутреннее примечание длиной до 2000 символов. Если примечания нет, поле можно не передавать.
+4. Объект \`customer\` и все пять его полей обязательны. Если сведений нет, передайте пустую строку \`""\`.
+5. \`items\` — непустой массив. \`row\` — уникальный положительный целый номер строки.
+6. Адрес записывается как \`ROW.SECTOR\`: номер ряда, точка и заглавная буква A–H, например \`23.F\`. Геометрическая доступность адреса проверяется отдельно при построении маршрута.
+7. \`sku\` (מק״ט) — строка из 3–10 цифр. \`barcode\` — строка GTIN-8/12/13/14 с корректной контрольной цифрой. Числовые коды нельзя передавать JSON-числами: это может удалить ведущие нули.
+8. \`quantity\` — общее количество единиц, \`unitsPerBox\` — единиц в коробке, \`boxCount\` — число коробок. Обязательно равенство \`quantity = unitsPerBox × boxCount\` с допуском 0,02.
+9. Неизвестные поля запрещены. Ошибочный файл целиком отклоняется и ничего не сохраняет.
+10. После успешного импорта заказ появляется в разделе «Заказы». Новые товары также добавляются в справочник по מק״ט/штрихкоду; существующие карточки товара импорт заказа не перезаписывает.
 
 Полное машинно-читаемое описание доступно в файле \`warehouse-pilot-order.schema.json\`, который скачивается рядом с этой инструкцией.
 `

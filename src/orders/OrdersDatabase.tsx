@@ -1,4 +1,4 @@
-import { Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Play, Route } from 'lucide-react'
+import { Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Play } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { listFulfillmentSessions } from '../fulfillment/storage'
 import { getFulfillmentProgress, type FulfillmentSession } from '../fulfillment/workflow'
@@ -138,6 +138,15 @@ export function OrdersDatabase() {
                     <i>{expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</i>
                   </button>
 
+                  <div className="order-card-open-row">
+                    {session ? (
+                      <div className={`order-workflow-progress ${session.status}`}><span>{session.status === 'completed' ? <CheckCircle2 size={15} /> : <Play size={15} />}<b>{session.status === 'completed' ? 'Комплектация завершена' : `В работе · ${fulfillmentProgress.percent}%`}</b></span><small>{fulfillmentProgress.picked} собрано · {fulfillmentProgress.missing} отсутствует · {fulfillmentProgress.pending} осталось</small></div>
+                    ) : (
+                      <div className="order-workflow-progress not-started"><span><Play size={15} /><b>Готов к работе</b></span><small>Маршрут из {orderLocations(order)} остановок рассчитается автоматически</small></div>
+                    )}
+                    <a className="primary-button order-open-button" href={`#work/${encodeURIComponent(order.id)}`}><Play size={16} />{session?.status === 'completed' ? 'Открыть результат' : session ? 'Продолжить заказ' : 'Открыть заказ'}</a>
+                  </div>
+
                   {expanded && (
                     <div className="order-details">
                       <div className="order-customer-line">
@@ -145,6 +154,7 @@ export function OrdersDatabase() {
                         <span><b>Адрес заказчика:</b> <span dir="auto">{[order.customer.city, order.customer.address].filter(Boolean).join(', ') || '—'}</span></span>
                         <span><b>Телефон:</b> {order.customer.phone || '—'}</span>
                       </div>
+                      {order.notes && <div className="order-notes"><b>Примечание</b><p>{order.notes}</p></div>}
                       <div className="order-items-wrap">
                         <table className="order-items-table">
                           <thead><tr><th>#</th><th>Адрес</th><th>מק״ט</th><th>Штрихкод</th><th>Название</th><th>В коробке</th><th>Коробок</th><th>Всего</th></tr></thead>
@@ -165,8 +175,6 @@ export function OrdersDatabase() {
                         </table>
                       </div>
                       <p className="order-detail-note"><Boxes size={14} />Товары с заполненными מק״ט, штрихкодом, названием и адресом автоматически попадают в справочник «Товары» при сохранении заказа.</p>
-                      {session && <div className={`order-workflow-progress ${session.status}`}><span>{session.status === 'completed' ? <CheckCircle2 size={15} /> : <Play size={15} />}<b>{session.status === 'completed' ? 'Комплектация завершена' : `В работе · ${fulfillmentProgress.percent}%`}</b></span><small>{fulfillmentProgress.picked} собрано · {fulfillmentProgress.missing} отсутствует · {fulfillmentProgress.pending} осталось</small></div>}
-                      <div className="order-detail-actions"><a className="secondary-button" href={`#route/${encodeURIComponent(order.id)}`}><Route size={16} />Расчёт маршрута</a><a className="primary-button" href={`#work/${encodeURIComponent(order.id)}`}><Play size={16} />{session?.status === 'completed' ? 'Открыть результат' : session ? 'Продолжить сборку' : 'Начать комплектацию'}</a></div>
                     </div>
                   )}
                 </article>

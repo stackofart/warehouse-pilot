@@ -32,21 +32,20 @@ import { listOrders, saveOrder } from './orders/storage'
 import { ProductDatabase } from './products/ProductDatabase'
 import { PalletWorkspace } from './pallet/PalletWorkspace'
 import { saveOrderProducts } from './products/storage'
-import { OrderOptimization } from './routing/OrderOptimization'
 import { OrderWorkflow } from './fulfillment/OrderWorkflow'
 import { WarehouseMap } from './warehouse/WarehouseMap'
 import './App.css'
 
 type OcrState = 'idle' | 'working' | 'success' | 'error'
-type AppSection = 'new-order' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'optimization' | 'pallet'
+type AppSection = 'new-order' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'pallet'
 
 function sectionFromHash(): AppSection {
   if (window.location.hash === '#products') return 'products'
   if (window.location.hash === '#orders') return 'orders'
   if (window.location.hash === '#warehouse') return 'warehouse'
-  if (window.location.hash === '#pallet') return 'pallet'
+  if (window.location.hash === '#pallet' || window.location.hash.startsWith('#pallet/')) return 'pallet'
   if (window.location.hash.startsWith('#work/')) return 'workflow'
-  if (window.location.hash.startsWith('#route/')) return 'optimization'
+  if (window.location.hash.startsWith('#route/')) return 'workflow'
   return 'new-order'
 }
 
@@ -95,6 +94,7 @@ function App() {
   const [confidence, setConfidence] = useState<number | null>(null)
   const [items, setItems] = useState<RecognizedOrderItem[]>([])
   const [orderNumber, setOrderNumber] = useState('')
+  const [orderNotes, setOrderNotes] = useState('')
   const [customer, setCustomer] = useState<RecognizedCustomer>(emptyCustomer)
   const [tablePreviewUrl, setTablePreviewUrl] = useState('')
   const [perspectiveCorrected, setPerspectiveCorrected] = useState(false)
@@ -130,6 +130,7 @@ function App() {
     setRecognizedText('')
     setItems([])
     setOrderNumber('')
+    setOrderNotes('')
     setCustomer(emptyCustomer)
     setTablePreviewUrl('')
     setConfidence(null)
@@ -201,6 +202,7 @@ function App() {
     setRecognizedText('')
     setItems([])
     setOrderNumber('')
+    setOrderNotes('')
     setCustomer(emptyCustomer)
     setTablePreviewUrl('')
     setConfidence(null)
@@ -236,6 +238,7 @@ function App() {
         id,
         createdAt: savedCreatedAt || undefined,
         orderNumber,
+        notes: orderNotes.trim(),
         customer,
         items,
         rawText: recognizedText,
@@ -272,7 +275,7 @@ function App() {
         <nav className="main-nav" aria-label="Основная навигация">
           <a href="#overview"><LayoutDashboard size={19} />Обзор</a>
           <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={19} />Новый заказ</a>
-          <a className={activeSection === 'orders' || activeSection === 'workflow' || activeSection === 'optimization' ? 'active' : ''} href="#orders"><ClipboardList size={19} />Заказы{orderCount > 0 && <span className="nav-count">{orderCount}</span>}</a>
+          <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><ClipboardList size={19} />Заказы{orderCount > 0 && <span className="nav-count">{orderCount}</span>}</a>
           <a className={activeSection === 'warehouse' ? 'active' : ''} href="#warehouse"><Map size={19} />Карта склада</a>
           <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={19} />Паллета</a>
           <a className={activeSection === 'products' ? 'active' : ''} href="#products"><Boxes size={19} />Товары</a>
@@ -299,7 +302,7 @@ function App() {
           <div className="shift-status"><span /> Смена активна <b>08:42</b></div>
         </header>
 
-        {activeSection === 'products' ? <ProductDatabase /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : activeSection === 'optimization' ? <OrderOptimization /> : <div className="page">
+        {activeSection === 'products' ? <ProductDatabase /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">НОВЫЙ ЗАКАЗ</p>
@@ -391,7 +394,7 @@ function App() {
                           <button className="primary-button save-button" type="button" disabled={saveState === 'saving'} onClick={() => void saveCurrentOrder()}>
                             <Save size={16} />{saveState === 'saving' ? 'Сохранение…' : saveState === 'saved' ? 'Сохранено' : 'Сохранить заказ'}
                           </button>
-                          {saveState === 'saved' && savedOrderId && <a className="secondary-button route-order-link" href={`#route/${encodeURIComponent(savedOrderId)}`}><Route size={16} />Маршрут</a>}
+                          {saveState === 'saved' && savedOrderId && <a className="secondary-button route-order-link" href={`#work/${encodeURIComponent(savedOrderId)}`}><ClipboardList size={16} />Открыть заказ</a>}
                         </div>
                       </div>
 
@@ -410,6 +413,7 @@ function App() {
                           <label><span>Адрес</span><input aria-label="Адрес заказчика" dir="rtl" value={customer.address} onChange={(event) => updateCustomer('address', event.target.value)} /></label>
                           <label><span>Город</span><input aria-label="Город заказчика" dir="rtl" value={customer.city} onChange={(event) => updateCustomer('city', event.target.value)} /></label>
                           <label><span>Телефон</span><input aria-label="Телефон заказчика" inputMode="tel" value={customer.phone} onChange={(event) => updateCustomer('phone', event.target.value)} /></label>
+                          <label className="wide order-notes-field"><span>Примечание к заказу</span><textarea aria-label="Примечание к заказу" placeholder="Например: позвонить перед отгрузкой или проверить замену" value={orderNotes} maxLength={2000} onChange={(event) => { setOrderNotes(event.target.value); setSaveState('idle') }} /></label>
                           <label className="wide raw-customer"><span>Весь блок после לכבוד</span><textarea aria-label="Все данные заказчика" dir="rtl" value={customer.raw} onChange={(event) => updateCustomer('raw', event.target.value)} /></label>
                         </div>
                       </section>
@@ -472,7 +476,7 @@ function App() {
 
       <nav className="mobile-bottom-nav" aria-label="Мобильная навигация">
         <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={21} /><span>Новый</span></a>
-        <a className={activeSection === 'orders' || activeSection === 'workflow' || activeSection === 'optimization' ? 'active' : ''} href="#orders"><span className="mobile-nav-icon"><ClipboardList size={21} />{orderCount > 0 && <i>{orderCount}</i>}</span><span>Заказы</span></a>
+        <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><span className="mobile-nav-icon"><ClipboardList size={21} />{orderCount > 0 && <i>{orderCount}</i>}</span><span>Заказы</span></a>
         <a className={activeSection === 'warehouse' ? 'active' : ''} href="#warehouse"><Map size={21} /><span>Карта</span></a>
         <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={21} /><span>Паллета</span></a>
         <a className={activeSection === 'products' ? 'active' : ''} href="#products"><Boxes size={21} /><span>Товары</span></a>

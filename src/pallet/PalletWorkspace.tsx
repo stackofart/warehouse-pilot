@@ -6,10 +6,19 @@ import { optimizePallet } from './packing'
 import { PalletScene } from './PalletScene'
 import { demoOrders, demoProducts } from './demoData'
 
+function palletOrderIdFromHash() {
+  const encodedId = window.location.hash.match(/^#pallet\/(.+)$/)?.[1] ?? ''
+  try {
+    return decodeURIComponent(encodedId)
+  } catch {
+    return ''
+  }
+}
+
 export function PalletWorkspace() {
   const [orders, setOrders] = useState<SavedOrder[]>(demoOrders)
   const [products, setProducts] = useState<Product[]>(demoProducts)
-  const [orderId, setOrderId] = useState('')
+  const [orderId, setOrderId] = useState(palletOrderIdFromHash)
   const [actualIds, setActualIds] = useState<Set<string>>(new Set())
   const [view, setView] = useState<'recommended' | 'actual'>('recommended')
   const [selectedProductId, setSelectedProductId] = useState('')
@@ -64,7 +73,7 @@ export function PalletWorkspace() {
     <div className="page pallet-workspace-page">
       <div className="page-heading pallet-workspace-heading">
         <div><p className="eyebrow">ПАЛЛЕТА 120×80 СМ</p><h1>3D-компоновка</h1><p>Отдельное рабочее место для проверки рекомендации и фиксации реально установленных коробок.</p></div>
-        <label className="order-selector"><span>Заказ или сценарий</span><select aria-label="Заказ для 3D-компоновки" value={orderId} onChange={(event) => { setOrderId(event.target.value); setActualIds(new Set()); setSelectedProductId(''); setPalletIndex(0) }}>{orders.map((savedOrder) => <option key={savedOrder.id} value={savedOrder.id}>{savedOrder.orderNumber || 'Без номера'}</option>)}</select></label>
+        <label className="order-selector"><span>Заказ или сценарий</span><select aria-label="Заказ для 3D-компоновки" value={orderId} onChange={(event) => { const id = event.target.value; setOrderId(id); setActualIds(new Set()); setSelectedProductId(''); setPalletIndex(0); window.location.hash = `pallet/${encodeURIComponent(id)}` }}>{orders.map((savedOrder) => <option key={savedOrder.id} value={savedOrder.id}>{savedOrder.orderNumber || 'Без номера'}</option>)}</select></label>
       </div>
 
       {plan && plan.requiredPallets > 1 && <div className="pallet-split-notice"><AlertTriangle size={17} /><span><strong>Заказ требует {plan.requiredPallets} паллеты</strong><small>На каждой не более шести слоёв. Крупные коробки размещаются первыми, более мелкие остатки переносятся на следующую паллету.</small></span></div>}
