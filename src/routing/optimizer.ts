@@ -13,11 +13,17 @@ export type RouteStop = {
 export type OptimizedRoute = {
   status: 'resolved' | 'partial'
   algorithm: 'held-karp' | 'nearest-neighbor-2opt'
-  startNode: 'central:0'
+  startNode: string
+  startAddress: string
   totalDistance: number
   stops: RouteStop[]
   pathPoints: Point[]
   unresolved: Array<{ address: string; reason: UnresolvedReason }>
+}
+
+export type RouteOptimizationOptions = {
+  /** Empty means the measured central entrance node. */
+  startAddress?: string
 }
 
 export type RouteOptimizationResult = OptimizedRoute
@@ -113,7 +119,7 @@ function nearestNeighbor2Opt(distances: number[][], stopCount: number) {
   return order
 }
 
-export function optimizeOrderRoute(items: RecognizedOrderItem[]): RouteOptimizationResult {
+export function optimizeOrderRoute(items: RecognizedOrderItem[], options: RouteOptimizationOptions = {}): RouteOptimizationResult {
   const graphResult = buildWarehouseGraph()
   if (graphResult.status !== 'ok') return { status: 'invalid', reason: 'WAREHOUSE_LAYOUT_INVALID' }
 
@@ -135,10 +141,21 @@ export function optimizeOrderRoute(items: RecognizedOrderItem[]): RouteOptimizat
   }
   if (!measured.length) return { status: 'unresolved', unresolved }
 
-  const nodeIds = ['central:0', ...measured.map((entry) => entry.nodeId)]
+  const requestedStart = options.startAddress?.trim().toUpperCase() ?? ''
+  const startResolution = requestedStart ? resolveAddress(requestedStart) : null
+  if (startResolution && startResolution.status !== 'resolved') {
+    return { status: 'invalid', reason: 'START_ADDRESS_UNRESOLVED' }
+  }
+  const startNode = startResolution?.nodeId ?? 'central:0'
+  const startAddress = startResolution?.address.canonical ?? ''
+  const nodeIds = [startNode, ...measured.map((entry) => entry.nodeId)]
   const distances = buildDistanceMatrix(graphResult.graph, nodeIds)
   if (distances.some((row) => row.some((value) => !Number.isFinite(value)))) return { status: 'invalid', reason: 'PATH_NOT_FOUND' }
-  const order = measured.length <= 12 ? heldKarpOpenPath(distances, measured.length) : nearestNeighbor2Opt(distances, measured.length)
+  let order = measured.length <= 12 ? heldKarpOpenPath(distances, measured.length) : nearestNeighbor2Opt(distances, measured.length)
+  const startStopIndex = measured.findIndex((entry) => entry.nodeId === startNode)
+  if (startStopIndex >= 0 && order[0] !== startStopIndex) {
+    order = [startStopIndex, ...order.filter((index) => index !== startStopIndex)]
+  }
 
   const stops: RouteStop[] = []
   const pathPoints: Point[] = []
@@ -156,7 +173,8 @@ export function optimizeOrderRoute(items: RecognizedOrderItem[]): RouteOptimizat
   return {
     status: unresolved.length ? 'partial' : 'resolved',
     algorithm: measured.length <= 12 ? 'held-karp' : 'nearest-neighbor-2opt',
-    startNode: 'central:0',
+    startNode,
+    startAddress,
     totalDistance: stops.reduce((total, stop) => total + stop.distanceFromPrevious, 0),
     stops,
     pathPoints,

@@ -32,4 +32,20 @@ describe('order route optimizer', () => {
     expect(result.algorithm).toBe('nearest-neighbor-2opt')
     expect(result.stops).toHaveLength(13)
   })
+
+  it('recalculates the remaining route from an actual warehouse address', () => {
+    const result = optimizeOrderRoute([item(1, '24.F'), item(2, '23.F')], { startAddress: '24.F' })
+    expect(result.status).toBe('resolved')
+    if (result.status !== 'resolved') return
+    expect(result.startAddress).toBe('24.F')
+    expect(result.stops.map((stop) => stop.address)).toEqual(['24.F', '23.F'])
+    expect(result.stops[0].distanceFromPrevious).toBe(0)
+  })
+
+  it('reports an unmeasured actual start instead of silently correcting it', () => {
+    expect(optimizeOrderRoute([item(1, '24.F')], { startAddress: '26.H' })).toEqual({
+      status: 'invalid',
+      reason: 'START_ADDRESS_UNRESOLVED',
+    })
+  })
 })
