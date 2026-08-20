@@ -271,7 +271,7 @@ export function ProductDatabase() {
 
       <section className="product-tools" aria-label="Инструменты базы товаров">
         <button className="secondary-button" type="button" disabled={isSaving} onClick={() => void simulateDimensions()}><WandSparkles size={15} />Симулировать габариты</button>
-        <label className="secondary-button product-import-button"><FileUp size={15} />Импорт JSON<input hidden type="file" accept="application/json,.json" onChange={importJson} /></label>
+        <label className="secondary-button product-import-button file-picker-trigger"><FileUp size={15} />Импорт JSON<input className="file-picker-input" aria-label="Выбрать JSON товаров" type="file" accept="application/json,.json" onChange={importJson} /></label>
         <button className="secondary-button" type="button" disabled={!products.length} onClick={() => downloadJson('warehouse-pilot-products.json', createProductDocument(products))}><Download size={15} />Экспорт товаров</button>
         <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-products.schema.json', productJsonSchema)}><FileJson size={15} />JSON Schema</button>
         <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-products.example.json', productImportExample)}><FileJson size={15} />Пример импорта</button>
@@ -325,7 +325,7 @@ export function ProductDatabase() {
 
             <div className="product-image-field">
               <span>Изображение товара</span>
-              <div>{form.imageDataUrl ? <img src={form.imageDataUrl} alt="Товар" /> : <ImagePlus size={24} />}<label className="secondary-button"><ImagePlus size={15} />{form.imageDataUrl ? 'Заменить' : 'Добавить'}<input hidden type="file" accept="image/*" onChange={loadProductImage} /></label>{form.imageDataUrl && <button className="icon-button" type="button" aria-label="Удалить изображение товара" onClick={() => updateForm('imageDataUrl', '')}><X size={15} /></button>}</div>
+              <div>{form.imageDataUrl ? <img src={form.imageDataUrl} alt="Товар" /> : <ImagePlus size={24} />}<label className="secondary-button file-picker-trigger"><ImagePlus size={15} />{form.imageDataUrl ? 'Заменить' : 'Добавить'}<input className="file-picker-input" aria-label="Выбрать изображение товара" type="file" accept="image/*" onChange={loadProductImage} /></label>{form.imageDataUrl && <button className="icon-button" type="button" aria-label="Удалить изображение товара" onClick={() => updateForm('imageDataUrl', '')}><X size={15} /></button>}</div>
             </div>
 
             {error && <p className="product-form-error" role="alert">{error}</p>}

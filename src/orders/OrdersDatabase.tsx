@@ -97,7 +97,7 @@ export function OrdersDatabase() {
           <p>Откройте заказ, чтобы посмотреть товары, количество и адреса комплектации.</p>
         </div>
         <div className="orders-heading-actions">
-          <label className={`secondary-button order-import-button ${isImporting ? 'disabled' : ''}`}><FileUp size={15} />{isImporting ? 'Импорт…' : 'Импорт заказа'}<input hidden disabled={isImporting} type="file" accept="application/json,.json" onChange={importJson} /></label>
+          <label className={`secondary-button order-import-button file-picker-trigger ${isImporting ? 'disabled' : ''}`}><FileUp size={15} />{isImporting ? 'Импорт…' : 'Импорт заказа'}<input className="file-picker-input" aria-label="Выбрать JSON заказа" disabled={isImporting} type="file" accept="application/json,.json" onChange={importJson} /></label>
           <button className="secondary-button" type="button" onClick={() => downloadFile('warehouse-pilot-order-import.md', orderImportInstructions, 'text/markdown;charset=utf-8')}><FileText size={15} />Инструкция</button>
           <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-order.schema.json', orderJsonSchema)}><FileJson size={15} />JSON Schema</button>
           <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-order.example.json', orderImportExample)}><Download size={15} />Пример</button>

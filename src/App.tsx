@@ -81,8 +81,6 @@ const emptyCustomer: RecognizedCustomer = {
 }
 
 function App() {
-  const uploadInput = useRef<HTMLInputElement>(null)
-  const cameraInput = useRef<HTMLInputElement>(null)
   const recognitionRun = useRef(0)
   const [isDragging, setIsDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
@@ -338,8 +336,8 @@ function App() {
                   <h2>Перетащите изображение сюда</h2>
                   <p>или выберите удобный способ загрузки</p>
                   <div className="upload-actions">
-                    <button className="primary-button" type="button" onClick={() => uploadInput.current?.click()}><Upload size={18} />Выбрать файл</button>
-                    <button className="secondary-button" type="button" onClick={() => cameraInput.current?.click()}><Camera size={18} />Сделать фото</button>
+                    <label className="primary-button file-picker-trigger"><Upload size={18} />Выбрать файл<input className="file-picker-input" aria-label="Выбрать изображение заказа" type="file" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" onChange={handleInput} /></label>
+                    <label className="secondary-button file-picker-trigger"><Camera size={18} />Сделать фото<input className="file-picker-input" aria-label="Сделать фото заказа" type="file" accept="image/*" capture="environment" onChange={handleInput} /></label>
                   </div>
                   <small className="file-hint">JPG, PNG, HEIC или WebP · до 20 МБ</small>
                 </div>
@@ -451,8 +449,6 @@ function App() {
                 </div>
               )}
 
-              <input ref={uploadInput} hidden type="file" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" onChange={handleInput} />
-              <input ref={cameraInput} hidden type="file" accept="image/*" capture="environment" onChange={handleInput} />
             </section>
 
             <aside className="tips-panel">
