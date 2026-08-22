@@ -1,5 +1,8 @@
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   Barcode,
   Check,
   ChevronDown,
@@ -380,12 +383,20 @@ export function OrderWorkflow() {
           <div className="workflow-scheme-heading"><div><Route size={18} /><span><b>Схема маршрута</b><small>Нажмите на остановку, чтобы перейти к ней в списке</small></span></div><strong>{session?.currentAddress || session?.startAddress || startAddress || CENTRAL_START_LABEL}</strong></div>
           <div className="workflow-route-snake">
             {routeRows.map((row, rowIndex) => (
-              <div className={`workflow-snake-row ${rowIndex % 2 ? 'reverse' : ''}`} key={rowIndex}>
-                {row.map((stop) => {
-                  const index = route!.stops.indexOf(stop)
-                  const stopStatus = session?.stops[stop.address]?.status ?? 'pending'
-                  return <button type="button" className={`workflow-snake-stop ${stopStatus} ${index === firstPendingStopIndex ? 'recommended' : ''}`} key={`${stop.address}-${index}`} onClick={() => scrollToStop(stop.address)}><span>{stopStatus === 'completed' ? <Check size={13} /> : index + 1}</span><b>{stop.address}</b><small>{stopStatusLabel(stopStatus)}</small></button>
-                })}
+              <div className="workflow-snake-lane" key={rowIndex}>
+                <div className={`workflow-snake-row ${rowIndex % 2 ? 'reverse' : ''}`}>
+                  {row.map((stop, stopIndex) => {
+                    const index = route!.stops.indexOf(stop)
+                    const stopStatus = session?.stops[stop.address]?.status ?? 'pending'
+                    return (
+                      <div className={`workflow-snake-step ${stopIndex < row.length - 1 ? 'with-arrow' : ''}`} key={`${stop.address}-${index}`}>
+                        <button type="button" className={`workflow-snake-stop ${stopStatus} ${index === firstPendingStopIndex ? 'recommended' : ''}`} onClick={() => scrollToStop(stop.address)}><span>{stopStatus === 'completed' ? <Check size={13} /> : index + 1}</span><b>{stop.address}</b><small>{stopStatusLabel(stopStatus)}</small></button>
+                        {stopIndex < row.length - 1 && <span className="workflow-snake-arrow" aria-hidden="true">{rowIndex % 2 ? <ArrowLeft size={24} strokeWidth={3.8} /> : <ArrowRight size={24} strokeWidth={3.8} />}</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+                {rowIndex < routeRows.length - 1 && <div className={`workflow-snake-turn ${rowIndex % 2 ? 'left' : 'right'}`} aria-hidden="true"><ArrowDown size={27} strokeWidth={3.8} /></div>}
               </div>
             ))}
           </div>
