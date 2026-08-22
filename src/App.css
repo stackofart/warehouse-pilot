@@ -93,7 +93,13 @@
 .sparkle-two { bottom: 15px; left: 9px; }
 .dropzone h2 { margin: 4px 0 7px; color: #203129; font-size: 19px; letter-spacing: -.3px; }
 .dropzone > p { margin: 0; color: #88958f; font-size: 14px; }
-.upload-actions { display: flex; gap: 9px; margin-top: 21px; }
+.recognition-mode-selector { width: min(430px,100%); margin-top: 20px; padding: 4px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px; border: 1px solid #dce6e2; border-radius: 11px; background: #f2f6f4; }
+.recognition-mode-selector button { min-width: 0; padding: 9px 10px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: 8px; color: #697a72; background: transparent; text-align: left; }
+.recognition-mode-selector button.active { color: #17694f; border-color: #b9d8cc; background: white; box-shadow: 0 3px 10px rgba(35,89,69,.08); }
+.recognition-mode-selector button > span, .recognition-mode-selector b, .recognition-mode-selector small { min-width: 0; display: block; }
+.recognition-mode-selector b { font-size: 13px; }
+.recognition-mode-selector small { margin-top: 2px; color: #8b9993; font-size: 10px; white-space: nowrap; }
+.upload-actions { display: flex; gap: 9px; margin-top: 13px; }
 .file-picker-trigger { position: relative; overflow: hidden; cursor: pointer; }
 .file-picker-input { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
 .file-picker-input:disabled { cursor: wait; }
@@ -136,6 +142,7 @@
 .progress-track { height: 5px; overflow: hidden; border-radius: 5px; background: #e4ece8; }
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--green); transition: width .3s ease; }
 .processing-state > b { display: block; margin-top: 7px; color: var(--green); font-size: 13px; }
+.recognition-retry-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 .error-state .primary-button { margin-top: 5px; }
 .text-result { width: 100%; align-self: stretch; display: flex; flex-direction: column; }
 .result-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 9px; }
@@ -784,6 +791,8 @@
   .page-heading h1 { font-size: 27px; }
   .upload-actions { width: 100%; flex-direction: column; }
   .upload-actions button, .upload-actions .file-picker-trigger { width: 100%; }
+  .recognition-mode-selector { grid-template-columns: 1fr; }
+  .recognition-mode-selector button { justify-content: flex-start; }
   .dropzone { padding: 24px 18px; }
   .recognition-header h2 { max-width: 210px; }
   .metadata-grid { grid-template-columns: 1fr; }

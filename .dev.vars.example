@@ -1,0 +1,4 @@
+# Copy this file to .dev.vars for local Wrangler development.
+# Never commit a real API key.
+OPENAI_API_KEY=replace_with_your_openai_api_key
+OPENAI_VISION_MODEL=gpt-5.6-luna

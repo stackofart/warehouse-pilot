@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react'
 import { recognizeOrderImage, validateOrderItem, type RecognizedCustomer, type RecognizedOrderItem } from './recognition/ocr'
+import { OpenAIRecognitionError, recognizeOrderImageWithOpenAI } from './recognition/openai'
 import { OrdersDatabase } from './orders/OrdersDatabase'
 import { listOrders, saveOrder } from './orders/storage'
 import { ProductDatabase } from './products/ProductDatabase'
@@ -37,6 +38,7 @@ import { WarehouseMap } from './warehouse/WarehouseMap'
 import './App.css'
 
 type OcrState = 'idle' | 'working' | 'success' | 'error'
+type RecognitionMode = 'openai' | 'local'
 type AppSection = 'new-order' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'pallet'
 
 function sectionFromHash(): AppSection {
@@ -69,6 +71,10 @@ const statusLabels: Record<string, string> = {
   'reading customer': 'Распознавание заказчика',
   'reading order number': 'Распознавание номера заказа',
   'reading document': 'Финальная проверка документа',
+  'preparing AI image': 'Подготовка изображения для OpenAI',
+  'uploading image': 'Защищённая отправка изображения',
+  'analyzing with OpenAI': 'OpenAI читает заказ',
+  'validating AI result': 'Проверка распознанных данных',
 }
 
 const emptyCustomer: RecognizedCustomer = {
@@ -86,6 +92,9 @@ function App() {
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState('')
   const [ocrState, setOcrState] = useState<OcrState>('idle')
+  const [recognitionMode, setRecognitionMode] = useState<RecognitionMode>('openai')
+  const [recognitionProvider, setRecognitionProvider] = useState<RecognitionMode>('openai')
+  const [recognitionModel, setRecognitionModel] = useState('')
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState('Подготовка')
   const [recognizedText, setRecognizedText] = useState('')
@@ -120,8 +129,10 @@ function App() {
     }
   }, [previewUrl])
 
-  const runRecognition = async (image: File) => {
+  const runRecognition = async (image: File, mode: RecognitionMode = recognitionMode) => {
     const runId = ++recognitionRun.current
+    setRecognitionProvider(mode)
+    setRecognitionModel('')
     setOcrState('working')
     setProgress(0)
     setProgressLabel('Подготовка изображения')
@@ -140,7 +151,8 @@ function App() {
     setProductSyncMessage('')
 
     try {
-      const result = await recognizeOrderImage(image, ({ progress: value, status }) => {
+      const recognize = mode === 'openai' ? recognizeOrderImageWithOpenAI : recognizeOrderImage
+      const result = await recognize(image, ({ progress: value, status }) => {
         if (runId !== recognitionRun.current) return
         setProgress(Math.max(0, Math.min(100, Math.round(value * 100))))
         setProgressLabel(statusLabels[status] ?? 'Обработка изображения')
@@ -153,12 +165,16 @@ function App() {
       setCustomer(result.customer)
       setTablePreviewUrl(result.tablePreviewUrl)
       setPerspectiveCorrected(result.usedPerspectiveCorrection)
+      setRecognitionProvider(result.provider === 'openai' ? 'openai' : 'local')
+      setRecognitionModel(result.model ?? '')
       setProgress(100)
       setOcrState('success')
     } catch (reason) {
       if (runId !== recognitionRun.current) return
       console.error(reason)
-      setError('Не удалось распознать изображение. Проверьте формат файла и попробуйте ещё раз.')
+      setError(reason instanceof OpenAIRecognitionError
+        ? reason.message
+        : 'Не удалось распознать изображение. Проверьте формат файла и попробуйте ещё раз.')
       setOcrState('error')
     }
   }
@@ -205,6 +221,7 @@ function App() {
     setTablePreviewUrl('')
     setConfidence(null)
     setPerspectiveCorrected(false)
+    setRecognitionModel('')
     setProgress(0)
     setError('')
     setSavedOrderId('')
@@ -283,7 +300,7 @@ function App() {
         <div className="sidebar-bottom">
           <div className="local-card">
             <span className="local-icon"><ShieldCheck size={18} /></span>
-            <div><strong>Работает локально</strong><span>Данные не покидают устройство</span></div>
+            <div><strong>Локальная база</strong><span>Заказы и товары остаются на устройстве</span></div>
           </div>
           <a href="#help" className="help-link"><HelpCircle size={18} />Помощь и поддержка</a>
           <div className="profile">
@@ -335,6 +352,14 @@ function App() {
                   </div>
                   <h2>Перетащите изображение сюда</h2>
                   <p>или выберите удобный способ загрузки</p>
+                  <div className="recognition-mode-selector" role="radiogroup" aria-label="Способ распознавания">
+                    <button className={recognitionMode === 'openai' ? 'active' : ''} type="button" role="radio" aria-checked={recognitionMode === 'openai'} onClick={() => setRecognitionMode('openai')}>
+                      <Sparkles size={18} /><span><b>Через OpenAI</b><small>Точнее · нужен интернет</small></span>
+                    </button>
+                    <button className={recognitionMode === 'local' ? 'active' : ''} type="button" role="radio" aria-checked={recognitionMode === 'local'} onClick={() => setRecognitionMode('local')}>
+                      <ShieldCheck size={18} /><span><b>На устройстве</b><small>Без отправки фото</small></span>
+                    </button>
+                  </div>
                   <div className="upload-actions">
                     <label className="primary-button file-picker-trigger"><Upload size={18} />Выбрать файл<input className="file-picker-input" aria-label="Выбрать изображение заказа" type="file" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" onChange={handleInput} /></label>
                     <label className="secondary-button file-picker-trigger"><Camera size={18} />Сделать фото<input className="file-picker-input" aria-label="Сделать фото заказа" type="file" accept="image/*" capture="environment" onChange={handleInput} /></label>
@@ -355,21 +380,23 @@ function App() {
                         <div className="processing-state">
                           <div className="processing-icon"><ScanLine size={30} /></div>
                           <h3>{progressLabel}</h3>
-                          <p>Иврит + английский · всё происходит на устройстве</p>
+                          <p>{recognitionProvider === 'openai'
+                            ? 'Иврит + английский · изображение обрабатывается через защищённый API'
+                            : 'Иврит + английский · всё происходит на устройстве'}</p>
                           <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
                           <b>{progress}%</b>
                         </div>
                       )}
 
                       {ocrState === 'error' && (
-                        <div className="error-state"><h3>Распознавание не завершено</h3><p>{error}</p><button className="primary-button" type="button" onClick={() => file && void runRecognition(file)}><RefreshCw size={17} />Попробовать снова</button></div>
+                        <div className="error-state"><h3>Распознавание не завершено</h3><p>{error}</p><div className="recognition-retry-actions"><button className="primary-button" type="button" onClick={() => file && void runRecognition(file, recognitionProvider)}><RefreshCw size={17} />Попробовать снова</button>{recognitionProvider === 'openai' && <button className="secondary-button" type="button" onClick={() => file && void runRecognition(file, 'local')}><ShieldCheck size={17} />Распознать локально</button>}</div></div>
                       )}
 
                       {ocrState === 'success' && (
                         <div className="text-result">
-                          <div className="result-heading"><div><span className="success-badge"><Check size={14} />Распознано</span><h3>Текст заказа</h3></div><span className="confidence">Точность {confidence}%</span></div>
+                          <div className="result-heading"><div><span className="success-badge"><Check size={14} />{recognitionProvider === 'openai' ? 'OpenAI' : 'Локально'}</span><h3>Текст заказа</h3></div><span className="confidence">Точность {confidence}%</span></div>
                           <textarea dir="auto" value={recognizedText} onChange={(event) => setRecognizedText(event.target.value)} aria-label="Распознанный текст заказа" />
-                          <p>Проверьте текст и исправьте возможные ошибки перед извлечением позиций.</p>
+                          <p>Проверьте текст и позиции перед сохранением.{recognitionModel ? ` Модель: ${recognitionModel}.` : ''}</p>
                           <button className="primary-button continue-button" type="button"><PackageOpen size={18} />Перейти к позициям</button>
                         </div>
                       )}
@@ -382,7 +409,7 @@ function App() {
                         <div>
                           <span className="section-kicker">СТРУКТУРИРОВАННЫЙ ЗАКАЗ</span>
                           <h3><Table2 size={18} />Проверка позиций</h3>
-                          <p>{items.length} строк найдено · {perspectiveCorrected ? 'перспектива исправлена' : 'использована область таблицы'}</p>
+                          <p>{items.length} строк найдено · {recognitionProvider === 'openai' ? 'структура извлечена OpenAI' : perspectiveCorrected ? 'перспектива исправлена' : 'использована область таблицы'}</p>
                         </div>
                         <div className="structured-actions">
                           <div className={`quality-score ${validRows === items.length ? 'complete' : ''}`}>
@@ -459,7 +486,7 @@ function App() {
                 <li><span>02</span><div><b>Добавьте света</b><p>Избегайте теней и бликов на бумаге.</p></div></li>
                 <li><span>03</span><div><b>Покажите весь лист</b><p>Все края должны попадать в кадр.</p></div></li>
               </ul>
-              <div className="privacy-note"><ShieldCheck size={18} /><p><b>Ваши данные защищены</b><br />Изображение обрабатывается только на этом устройстве.</p></div>
+              <div className="privacy-note"><ShieldCheck size={18} /><p><b>Ваши данные защищены</b><br />{recognitionMode === 'openai' ? 'В OpenAI отправляется только выбранное изображение; база остаётся на устройстве.' : 'Изображение обрабатывается только на этом устройстве.'}</p></div>
             </aside>
           </div>
 

@@ -38,6 +38,8 @@ export type OcrResult = {
   tablePreviewUrl: string
   detectedRows: number
   usedPerspectiveCorrection: boolean
+  provider?: 'local' | 'openai'
+  model?: string
 }
 
 type SheetValue = {
@@ -107,7 +109,7 @@ async function recognizeCell(
   return { text: data.text.trim(), confidence: data.confidence }
 }
 
-function normalizeAddress(raw: string) {
+export function normalizeAddress(raw: string) {
   let value = raw.toUpperCase().replace(/[^0-9A-H.]/g, '')
   value = value.replace(/^I/, '1').replace(/^O/, '0')
   const suffixByDigit: Record<string, string> = { '0': 'D', '4': 'A', '5': 'F', '6': 'G', '8': 'B' }
@@ -122,17 +124,17 @@ function normalizeAddress(raw: string) {
   return match?.[0] ?? value
 }
 
-function normalizeDigits(raw: string, minimumLength = 1) {
+export function normalizeDigits(raw: string, minimumLength = 1) {
   const candidates = raw.match(/\d+/g) ?? []
   return candidates.sort((a, b) => b.length - a.length).find((value) => value.length >= minimumLength) ?? ''
 }
 
-function normalizeSku(raw: string) {
+export function normalizeSku(raw: string) {
   const value = normalizeDigits(raw, 2)
   return value.length === 5 && value.startsWith('1') ? value.slice(1) : value
 }
 
-function normalizeQuantity(raw: string) {
+export function normalizeQuantity(raw: string) {
   const cleaned = raw.replace(',', '.').replace(/[^\d.]/g, '')
   const match = cleaned.match(/\d+(?:\.\d{1,2})?/)
   if (!match) return ''
@@ -551,6 +553,7 @@ export async function recognizeOrderImage(
       tablePreviewUrl: table.previewUrl,
       detectedRows: rowCount,
       usedPerspectiveCorrection: table.usedPerspectiveCorrection,
+      provider: 'local',
     }
   } finally {
     await worker.terminate()
