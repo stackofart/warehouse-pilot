@@ -108,7 +108,6 @@ export type AddressResolution =
   | { status: 'invalid'; reason: 'INVALID_ADDRESS_FORMAT' }
 
 export type UnresolvedReason =
-  | 'ADDRESS_26_H_UNKNOWN'
   | 'ROWS_11_TO_20_UNKNOWN'
   | 'ROW_GEOMETRY_UNKNOWN'
   | 'SECTOR_GEOMETRY_UNKNOWN'

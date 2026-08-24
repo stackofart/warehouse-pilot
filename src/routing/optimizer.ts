@@ -15,7 +15,9 @@ export type OptimizedRoute = {
   algorithm: 'held-karp' | 'nearest-neighbor-2opt'
   startNode: string
   startAddress: string
+  finishAddress: string
   totalDistance: number
+  distanceToFinish: number | null
   stops: RouteStop[]
   pathPoints: Point[]
   unresolved: Array<{ address: string; reason: UnresolvedReason }>
@@ -24,6 +26,8 @@ export type OptimizedRoute = {
 export type RouteOptimizationOptions = {
   /** Empty means the measured central entrance node. */
   startAddress?: string
+  /** Optional fixed final point, visited after every picking stop. */
+  finishAddress?: string
 }
 
 export type RouteOptimizationResult = OptimizedRoute
@@ -37,7 +41,7 @@ function buildDistanceMatrix(graph: WarehouseGraph, nodeIds: string[]) {
   }))
 }
 
-function heldKarpOpenPath(distances: number[][], stopCount: number) {
+function heldKarpOpenPath(distances: number[][], stopCount: number, finishMatrixIndex: number | null) {
   const stateCount = 1 << stopCount
   const costs = Array.from({ length: stateCount }, () => Array(stopCount).fill(Number.POSITIVE_INFINITY))
   const parents = Array.from({ length: stateCount }, () => Array(stopCount).fill(-1))
@@ -62,7 +66,9 @@ function heldKarpOpenPath(distances: number[][], stopCount: number) {
   const fullMask = stateCount - 1
   let last = 0
   for (let candidate = 1; candidate < stopCount; candidate += 1) {
-    if (costs[fullMask][candidate] < costs[fullMask][last]) last = candidate
+    const candidateCost = costs[fullMask][candidate] + (finishMatrixIndex === null ? 0 : distances[candidate + 1][finishMatrixIndex])
+    const lastCost = costs[fullMask][last] + (finishMatrixIndex === null ? 0 : distances[last + 1][finishMatrixIndex])
+    if (candidateCost < lastCost) last = candidate
   }
   const order: number[] = []
   let mask = fullMask
@@ -75,14 +81,15 @@ function heldKarpOpenPath(distances: number[][], stopCount: number) {
   return order
 }
 
-function openPathCost(order: number[], distances: number[][]) {
-  if (!order.length) return 0
+function openPathCost(order: number[], distances: number[][], finishMatrixIndex: number | null) {
+  if (!order.length) return finishMatrixIndex === null ? 0 : distances[0][finishMatrixIndex]
   let total = distances[0][order[0] + 1]
   for (let index = 1; index < order.length; index += 1) total += distances[order[index - 1] + 1][order[index] + 1]
+  if (finishMatrixIndex !== null) total += distances[order.at(-1)! + 1][finishMatrixIndex]
   return total
 }
 
-function nearestNeighbor2Opt(distances: number[][], stopCount: number) {
+function nearestNeighbor2Opt(distances: number[][], stopCount: number, finishMatrixIndex: number | null) {
   const remaining = new Set(Array.from({ length: stopCount }, (_, index) => index))
   const order: number[] = []
   let currentMatrixIndex = 0
@@ -104,11 +111,11 @@ function nearestNeighbor2Opt(distances: number[][], stopCount: number) {
   let improved = true
   while (improved) {
     improved = false
-    const currentCost = openPathCost(order, distances)
+    const currentCost = openPathCost(order, distances, finishMatrixIndex)
     for (let start = 0; start < order.length - 1 && !improved; start += 1) {
       for (let end = start + 1; end < order.length; end += 1) {
         const candidate = [...order.slice(0, start), ...order.slice(start, end + 1).reverse(), ...order.slice(end + 1)]
-        if (openPathCost(candidate, distances) + 1e-9 < currentCost) {
+        if (openPathCost(candidate, distances, finishMatrixIndex) + 1e-9 < currentCost) {
           order.splice(0, order.length, ...candidate)
           improved = true
           break
@@ -139,8 +146,6 @@ export function optimizeOrderRoute(items: RecognizedOrderItem[], options: RouteO
     if (resolution.status === 'resolved') measured.push({ address: resolution.address.canonical, nodeId: resolution.nodeId, items: addressItems })
     else if (resolution.status === 'unresolved') unresolved.push({ address, reason: resolution.reason })
   }
-  if (!measured.length) return { status: 'unresolved', unresolved }
-
   const requestedStart = options.startAddress?.trim().toUpperCase() ?? ''
   const startResolution = requestedStart ? resolveAddress(requestedStart) : null
   if (startResolution && startResolution.status !== 'resolved') {
@@ -148,10 +153,21 @@ export function optimizeOrderRoute(items: RecognizedOrderItem[], options: RouteO
   }
   const startNode = startResolution?.nodeId ?? 'central:0'
   const startAddress = startResolution?.address.canonical ?? ''
-  const nodeIds = [startNode, ...measured.map((entry) => entry.nodeId)]
+  const requestedFinish = options.finishAddress?.trim().toUpperCase() ?? ''
+  const finishResolution = requestedFinish ? resolveAddress(requestedFinish) : null
+  if (finishResolution && finishResolution.status !== 'resolved') {
+    return { status: 'invalid', reason: 'FINISH_ADDRESS_UNRESOLVED' }
+  }
+  if (!measured.length && !finishResolution) return { status: 'unresolved', unresolved }
+
+  const finishAddress = finishResolution?.address.canonical ?? ''
+  const nodeIds = [startNode, ...measured.map((entry) => entry.nodeId), ...(finishResolution ? [finishResolution.nodeId] : [])]
+  const finishMatrixIndex = finishResolution ? measured.length + 1 : null
   const distances = buildDistanceMatrix(graphResult.graph, nodeIds)
   if (distances.some((row) => row.some((value) => !Number.isFinite(value)))) return { status: 'invalid', reason: 'PATH_NOT_FOUND' }
-  let order = measured.length <= 12 ? heldKarpOpenPath(distances, measured.length) : nearestNeighbor2Opt(distances, measured.length)
+  let order = measured.length
+    ? measured.length <= 12 ? heldKarpOpenPath(distances, measured.length, finishMatrixIndex) : nearestNeighbor2Opt(distances, measured.length, finishMatrixIndex)
+    : []
   const startStopIndex = measured.findIndex((entry) => entry.nodeId === startNode)
   if (startStopIndex >= 0 && order[0] !== startStopIndex) {
     order = [startStopIndex, ...order.filter((index) => index !== startStopIndex)]
@@ -170,12 +186,23 @@ export function optimizeOrderRoute(items: RecognizedOrderItem[], options: RouteO
     previousMatrixIndex = stopIndex + 1
   }
 
+  let distanceToFinish: number | null = null
+  if (finishResolution && finishMatrixIndex !== null) {
+    const path = shortestGraphPath(graphResult.graph, nodeIds[previousMatrixIndex], finishResolution.nodeId)
+    if (!path) return { status: 'invalid', reason: 'PATH_NOT_FOUND' }
+    const points = path.nodeIds.map((nodeId) => graphResult.graph.nodes.get(nodeId)).filter((node) => node).map((node) => ({ x: node!.x, y: node!.y }))
+    pathPoints.push(...(pathPoints.length ? points.slice(1) : points))
+    distanceToFinish = path.distance
+  }
+
   return {
     status: unresolved.length ? 'partial' : 'resolved',
     algorithm: measured.length <= 12 ? 'held-karp' : 'nearest-neighbor-2opt',
     startNode,
     startAddress,
-    totalDistance: stops.reduce((total, stop) => total + stop.distanceFromPrevious, 0),
+    finishAddress,
+    totalDistance: stops.reduce((total, stop) => total + stop.distanceFromPrevious, 0) + (distanceToFinish ?? 0),
+    distanceToFinish,
     stops,
     pathPoints,
     unresolved,

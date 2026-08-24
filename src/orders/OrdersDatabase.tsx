@@ -1,4 +1,4 @@
-import { AlertTriangle, Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Play, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Pause, Play, ShieldCheck } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { listFulfillmentSessions } from '../fulfillment/storage'
 import { getFulfillmentProgress, type FulfillmentSession } from '../fulfillment/workflow'
@@ -141,11 +141,11 @@ export function OrdersDatabase() {
 
                   <div className="order-card-open-row">
                     {session ? (
-                      <div className={`order-workflow-progress ${session.status}`}><span>{session.status === 'completed' ? <CheckCircle2 size={15} /> : <Play size={15} />}<b>{session.status === 'completed' ? 'Комплектация завершена' : `В работе · ${fulfillmentProgress.percent}%`}</b></span><small>{fulfillmentProgress.picked} собрано · {fulfillmentProgress.missing} отсутствует · {fulfillmentProgress.pending} осталось</small></div>
+                      <div className={`order-workflow-progress ${session.status}`}><span>{session.status === 'completed' ? <CheckCircle2 size={15} /> : session.status === 'paused' ? <Pause size={15} /> : <Play size={15} />}<b>{session.status === 'completed' ? 'Комплектация завершена' : session.status === 'paused' ? `На паузе · ${fulfillmentProgress.percent}%` : `В работе · ${fulfillmentProgress.percent}%`}</b></span><small>{fulfillmentProgress.picked} собрано · {fulfillmentProgress.checking} проверяется · {fulfillmentProgress.missing} отсутствует · {fulfillmentProgress.pending} осталось</small></div>
                     ) : (
                       <div className="order-workflow-progress not-started"><span><Play size={15} /><b>Готов к работе</b></span><small>Маршрут из {orderLocations(order)} остановок рассчитается автоматически</small></div>
                     )}
-                    <a className="primary-button order-open-button" href={`#work/${encodeURIComponent(order.id)}`}><Play size={16} />{session?.status === 'completed' ? 'Открыть результат' : session ? 'Продолжить заказ' : 'Открыть заказ'}</a>
+                    <a className="primary-button order-open-button" href={`#work/${encodeURIComponent(order.id)}`}><Play size={16} />{session?.status === 'completed' ? 'Открыть результат' : session?.status === 'paused' ? 'Открыть и продолжить' : session ? 'Продолжить заказ' : 'Открыть заказ'}</a>
                   </div>
 
                   {expanded && (

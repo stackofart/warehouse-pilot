@@ -29,7 +29,6 @@ export function resolveAddress(value: string, layout: WarehouseLayout = warehous
     if (!position) return { status: 'unresolved', address, reason: 'SECTOR_GEOMETRY_UNKNOWN' }
     return { status: 'resolved', address, nodeId: addressNodeId(address), point: { x: position.x, y: position.y } }
   }
-  if (address.canonical === '26.H') return { status: 'unresolved', address, reason: 'ADDRESS_26_H_UNKNOWN' }
   if (address.row >= layout.unknownRows.from && address.row <= layout.unknownRows.to) {
     return { status: 'unresolved', address, reason: 'ROWS_11_TO_20_UNKNOWN' }
   }

@@ -20,7 +20,6 @@ const OFFSET_X = (SVG_WIDTH - MAP_WIDTH) / 2
 const OFFSET_Y = (SVG_HEIGHT - MAP_HEIGHT) / 2
 
 const reasonLabels: Record<string, string> = {
-  ADDRESS_26_H_UNKNOWN: 'Геометрия адреса 26.H неизвестна',
   ROWS_11_TO_20_UNKNOWN: 'Геометрия рядов 11–20 неизвестна',
   ROW_GEOMETRY_UNKNOWN: 'Геометрия этого ряда неизвестна',
   SECTOR_GEOMETRY_UNKNOWN: 'Геометрия этого сектора неизвестна',
@@ -139,7 +138,7 @@ export function WarehouseMap() {
 
       <div className="warehouse-map-layout">
         <section className="warehouse-map-card">
-          <div className="map-card-heading"><div><Warehouse size={18} /><span><strong>Метрическая карта склада</strong><small>Y: −20.4 … 22.4 м</small></span></div><span>{locations.measured.length} адресов с товарами</span></div>
+          <div className="map-card-heading"><div><Warehouse size={18} /><span><strong>Метрическая карта склада</strong><small>Y: {MIN_Y.toFixed(1)} … {MAX_Y.toFixed(1)} м</small></span></div><span>{locations.measured.length} адресов с товарами</span></div>
           <div className="warehouse-svg-wrap">
             <svg className="warehouse-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Карта измеренной части склада">
               <rect className="map-background" x={mapX(MIN_X)} y={mapY(MAX_Y)} width={MAP_WIDTH} height={MAP_HEIGHT} rx="5" />
@@ -204,7 +203,7 @@ export function WarehouseMap() {
 
           <section className="map-info-card unresolved-object-card">
             <div className="map-side-heading"><AlertTriangle size={19} /><div><p className="section-kicker">UNRESOLVED</p><h2>Не на шкале</h2></div></div>
-            <ul><li><b>26.H:</b> сектор не измерен</li><li><b>Выход паллет:</b> X неизвестен</li><li><b>Проход у стены:</b> существование не подтверждено</li></ul>
+            <ul><li><b>Выход паллет:</b> X неизвестен</li><li><b>Проход у стены:</b> существование не подтверждено</li></ul>
           </section>
         </aside>
       </div>

@@ -48,24 +48,27 @@ describe('warehouse measured geometry', () => {
     if (upper.status === 'resolved' && lower.status === 'resolved') expect(upper.point.x).toBe(lower.point.x)
   })
 
-  it('keeps 26.H unresolved', () => {
-    expect(resolveAddress('26.H')).toMatchObject({ status: 'unresolved', reason: 'ADDRESS_26_H_UNKNOWN' })
+  it('resolves sector H for every upper row from 21 through 32', () => {
+    for (let row = 21; row <= 32; row += 1) {
+      expect(resolveAddress(`${row}.H`)).toMatchObject({ status: 'resolved', address: { canonical: `${row}.H` } })
+    }
+    expect(distance('26.G', '26.H')).toMatchObject({ status: 'resolved', distance: 2.4 })
   })
 
   it('resolves 40.B on the measured top aisle', () => {
-    expect(resolveAddress('40.B')).toMatchObject({ status: 'resolved', point: { x: 8, y: 19 } })
+    expect(resolveAddress('40.B')).toMatchObject({ status: 'resolved', point: { x: 8, y: 21.4 } })
   })
 
   it('records the 2 m top aisle and measured Zone 40 positions', () => {
-    expect(warehouseLayout.zone40.topCrossAisle).toMatchObject({ exists: true, traversable: true, measured: true, width: 2, centerY: 19 })
+    expect(warehouseLayout.zone40.topCrossAisle).toMatchObject({ exists: true, traversable: true, measured: true, width: 2, centerY: 21.4 })
     expect(warehouseLayout.zone40.positions['40.A'].oppositeRackBlock).toEqual([24, 25])
     expect(warehouseLayout.zone40.positions['40.B'].oppositeRackBlock).toEqual([26, 27])
-    expect(warehouseLayout.zone40.positions['40.D']).toMatchObject({ role: 'finish', oppositeRackBlock: [28, 29], x: 12.4, y: 19 })
-    expect(resolveAddress('40.D')).toMatchObject({ status: 'resolved', point: { x: 12.4, y: 19 } })
+    expect(warehouseLayout.zone40.positions['40.D']).toMatchObject({ role: 'finish', oppositeRackBlock: [28, 29], x: 12.4, y: 21.4 })
+    expect(resolveAddress('40.D')).toMatchObject({ status: 'resolved', point: { x: 12.4, y: 21.4 } })
   })
 
   it('routes from an upper address through the top aisle to Zone 40', () => {
-    const result = distance('24.G', '40.A')
+    const result = distance('24.H', '40.A')
     expect(result.status).toBe('resolved')
     if (result.status === 'resolved') expect(result.distance).toBeCloseTo(4.4)
   })

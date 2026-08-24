@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  arriveAndStartFulfillmentStop,
   completeFulfillmentSession,
   createFulfillmentSession,
+  getFulfillmentActiveDuration,
   getFulfillmentProgress,
+  pauseFulfillmentSession,
   reconcileFulfillmentSession,
+  resumeFulfillmentSession,
   updateFulfillmentItem,
+  updateFulfillmentFinish,
   updateFulfillmentLocation,
   updateFulfillmentStop,
   type FulfillmentSession,
@@ -14,19 +19,26 @@ describe('order fulfillment workflow', () => {
   it('starts all order rows as pending and keeps the start time', () => {
     const session = createFulfillmentSession('order-1', [1, 2], '2026-08-19T08:00:00.000Z')
     expect(session).toMatchObject({ orderId: 'order-1', status: 'in-progress', startedAt: '2026-08-19T08:00:00.000Z' })
-    expect(getFulfillmentProgress(session)).toEqual({ total: 2, handled: 0, picked: 0, missing: 0, pending: 2, percent: 0 })
+    expect(getFulfillmentProgress(session)).toEqual({ total: 2, handled: 0, picked: 0, missing: 0, checking: 0, pending: 2, percent: 0 })
   })
 
   it('tracks picked and missing positions with timestamps', () => {
     let session = createFulfillmentSession('order-1', [1, 2])
     session = updateFulfillmentItem(session, 1, 'picked', '2026-08-19T08:01:00.000Z')
     session = updateFulfillmentItem(session, 2, 'missing', '2026-08-19T08:02:00.000Z')
-    expect(getFulfillmentProgress(session)).toEqual({ total: 2, handled: 2, picked: 1, missing: 1, pending: 0, percent: 100 })
+    expect(getFulfillmentProgress(session)).toEqual({ total: 2, handled: 2, picked: 1, missing: 1, checking: 0, pending: 0, percent: 100 })
     expect(session.items['2'].updatedAt).toBe('2026-08-19T08:02:00.000Z')
   })
 
   it('does not allow completion while a position is pending', () => {
     const session = createFulfillmentSession('order-1', [1, 2])
+    expect(() => completeFulfillmentSession(session)).toThrow('Сначала обработайте все позиции заказа')
+  })
+
+  it('keeps a position unresolved while it is being checked', () => {
+    let session = createFulfillmentSession('order-1', [1])
+    session = updateFulfillmentItem(session, 1, 'checking', '2026-08-19T08:01:00.000Z')
+    expect(getFulfillmentProgress(session)).toMatchObject({ handled: 0, checking: 1, pending: 1, percent: 0 })
     expect(() => completeFulfillmentSession(session)).toThrow('Сначала обработайте все позиции заказа')
   })
 
@@ -51,10 +63,11 @@ describe('order fulfillment workflow', () => {
     let session = createFulfillmentSession('order-1', [1], {
       addresses: ['25.A'],
       startAddress: '23.F',
+      finishAddress: '40.B',
       now: '2026-08-19T08:00:00.000Z',
     })
-    expect(session).toMatchObject({ startAddress: '23.F', currentAddress: '23.F' })
-    session = updateFulfillmentStop(session, '25.a', 'arrived', '2026-08-19T08:03:00.000Z')
+    expect(session).toMatchObject({ startAddress: '23.F', currentAddress: '23.F', finishAddress: '40.B' })
+    session = updateFulfillmentStop(session, '25.a', 'arrived', '2026-08-19T08:03:00.000Z', { distanceMeters: 12.4 })
     session = updateFulfillmentStop(session, '25.A', 'collecting', '2026-08-19T08:04:00.000Z')
     session = updateFulfillmentItem(session, 1, 'picked', '2026-08-19T08:06:00.000Z')
     session = updateFulfillmentStop(session, '25.A', 'completed', '2026-08-19T08:07:00.000Z')
@@ -64,7 +77,14 @@ describe('order fulfillment workflow', () => {
       arrivedAt: '2026-08-19T08:03:00.000Z',
       collectingAt: '2026-08-19T08:04:00.000Z',
       completedAt: '2026-08-19T08:07:00.000Z',
+      travelStartedAt: '2026-08-19T08:00:00.000Z',
+      fromAddress: '23.F',
+      distanceFromPreviousMeters: 12.4,
     })
+    expect(session.events.map((event) => event.type)).toEqual([
+      'order_started', 'stop_arrived', 'stop_collecting_started', 'item_status_changed', 'stop_completed',
+    ])
+    expect(session.events[1]).toMatchObject({ address: '25.A', fromAddress: '23.F', distanceMeters: 12.4 })
     expect(() => completeFulfillmentSession(session)).not.toThrow()
   })
 
@@ -73,6 +93,54 @@ describe('order fulfillment workflow', () => {
     const moved = updateFulfillmentLocation(session, '25.a', '2026-08-19T08:02:00.000Z')
     expect(moved.currentAddress).toBe('25.A')
     expect(moved.stops['28.A'].status).toBe('pending')
+    expect(moved.events.at(-1)).toMatchObject({ type: 'location_changed', fromAddress: '', toAddress: '25.A' })
+  })
+
+  it('records arrival and collection start as one stop action', () => {
+    const session = createFulfillmentSession('order-1', [1], { addresses: ['25.A'], startAddress: '23.F' })
+    const collecting = arriveAndStartFulfillmentStop(session, '25.A', '2026-08-19T08:03:00.000Z', { distanceMeters: 12.4 })
+    expect(collecting.stops['25.A']).toMatchObject({
+      status: 'collecting',
+      arrivedAt: '2026-08-19T08:03:00.000Z',
+      collectingAt: '2026-08-19T08:03:00.000Z',
+      distanceFromPreviousMeters: 12.4,
+    })
+    expect(collecting.events.slice(-2).map((event) => event.type)).toEqual(['stop_arrived', 'stop_collecting_started'])
+  })
+
+  it('pauses active timing and prevents work until the order is resumed', () => {
+    let session = createFulfillmentSession('order-1', [1], '2026-08-19T08:00:00.000Z')
+    session = pauseFulfillmentSession(session, '2026-08-19T08:01:00.000Z')
+    expect(session).toMatchObject({ status: 'paused', pausedAt: '2026-08-19T08:01:00.000Z' })
+    expect(getFulfillmentActiveDuration(session, new Date('2026-08-19T08:04:00.000Z').getTime())).toBe(60_000)
+    expect(() => updateFulfillmentItem(session, 1, 'checking')).toThrow('Заказ на паузе')
+
+    session = resumeFulfillmentSession(session, '2026-08-19T08:04:00.000Z')
+    expect(session).toMatchObject({ status: 'in-progress', pausedAt: null, totalPausedMs: 180_000 })
+    expect(getFulfillmentActiveDuration(session, new Date('2026-08-19T08:05:00.000Z').getTime())).toBe(120_000)
+    expect(session.events.slice(-2).map((event) => event.type)).toEqual(['order_paused', 'order_resumed'])
+  })
+
+  it('stores a changed loading gate in the action history', () => {
+    const session = createFulfillmentSession('order-1', [1], { finishAddress: '40.A' })
+    const changed = updateFulfillmentFinish(session, '40.b', '2026-08-19T08:02:05.000Z')
+    expect(changed.finishAddress).toBe('40.B')
+    expect(changed.events.at(-1)).toMatchObject({
+      type: 'finish_changed',
+      at: '2026-08-19T08:02:05.000Z',
+      fromAddress: '40.A',
+      toAddress: '40.B',
+    })
+  })
+
+  it('keeps every item action for later statistics instead of overwriting history', () => {
+    let session = createFulfillmentSession('order-1', [1], '2026-08-19T08:00:00.000Z')
+    session = updateFulfillmentItem(session, 1, 'picked', '2026-08-19T08:01:01.000Z')
+    session = updateFulfillmentItem(session, 1, 'pending', '2026-08-19T08:01:07.000Z')
+    session = updateFulfillmentItem(session, 1, 'missing', '2026-08-19T08:01:11.000Z')
+    const actions = session.events.filter((event) => event.type === 'item_status_changed')
+    expect(actions).toHaveLength(3)
+    expect(actions.map((event) => event.itemStatus)).toEqual(['picked', 'pending', 'missing'])
   })
 
   it('migrates an old saved session without losing item progress', () => {
@@ -88,5 +156,7 @@ describe('order fulfillment workflow', () => {
     expect(migrated.items['1'].status).toBe('picked')
     expect(migrated.stops['25.A'].status).toBe('pending')
     expect(migrated.currentAddress).toBe('')
+    expect(migrated.finishAddress).toBe('40.D')
+    expect(migrated.events.map((event) => event.type)).toEqual(['order_started', 'item_status_changed'])
   })
 })
