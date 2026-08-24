@@ -18,6 +18,8 @@ const clean = (product: ProductTransfer): ProductTransfer => {
     location: String(product.location ?? '').trim().toUpperCase(),
     ...(typeof description === 'string' ? { description: description.trim() } : {}),
     technicalDataSource: 'imported',
+    verificationStatus: product.verificationStatus === 'unverified' ? 'unverified' : 'verified',
+    verificationSource: 'imported',
   }
 }
 
@@ -46,6 +48,9 @@ export function parseProductDocument(text: string): ProductDocument {
     }
     if (typeof product.description === 'string' && product.description.length > 2000) {
       throw new Error(`Поле description у товара ${index + 1} не должно превышать 2000 символов`)
+    }
+    if ('verificationStatus' in product && product.verificationStatus !== 'verified' && product.verificationStatus !== 'unverified') {
+      throw new Error(`Поле verificationStatus у товара ${index + 1} должно быть verified или unverified`)
     }
   })
   return document as ProductDocument
@@ -97,7 +102,7 @@ export const productJsonSchema = {
   },
   '$defs': {
     physicalSpec: { type: 'object', properties: { lengthCm: { type: 'number', exclusiveMinimum: 0 }, widthCm: { type: 'number', exclusiveMinimum: 0 }, heightCm: { type: 'number', exclusiveMinimum: 0 }, weightKg: { type: 'number', exclusiveMinimum: 0 } } },
-    product: { type: 'object', required: ['sku', 'barcode', 'name', 'location'], properties: { sku: { type: 'string', pattern: '^\\d{3,10}$' }, barcode: { type: 'string', pattern: '^\\d{8,14}$' }, name: { type: 'string', minLength: 1 }, location: { type: 'string', minLength: 1 }, description: { type: 'string', maxLength: 2000, description: 'Необязательное подробное описание товара.' }, unitsPerBox: { type: 'number', exclusiveMinimum: 0 }, itemSpec: { '$ref': '#/$defs/physicalSpec' }, boxSpec: { allOf: [{ '$ref': '#/$defs/physicalSpec' }, { type: 'object', properties: { maxTopLoadKg: { type: 'number', exclusiveMinimum: 0 } } }] }, rigidity: { type: 'number', minimum: 1, maximum: 5 }, fragility: { type: 'number', minimum: 1, maximum: 5 }, imageDataUrl: { type: 'string' } } },
+    product: { type: 'object', required: ['sku', 'barcode', 'name', 'location'], properties: { sku: { type: 'string', pattern: '^\\d{3,10}$' }, barcode: { type: 'string', pattern: '^\\d{8,14}$' }, name: { type: 'string', minLength: 1 }, location: { type: 'string', minLength: 1 }, description: { type: 'string', maxLength: 2000, description: 'Необязательное подробное описание товара.' }, verificationStatus: { type: 'string', enum: ['verified', 'unverified'] }, unitsPerBox: { type: 'number', exclusiveMinimum: 0 }, itemSpec: { '$ref': '#/$defs/physicalSpec' }, boxSpec: { allOf: [{ '$ref': '#/$defs/physicalSpec' }, { type: 'object', properties: { maxTopLoadKg: { type: 'number', exclusiveMinimum: 0 } } }] }, rigidity: { type: 'number', minimum: 1, maximum: 5 }, fragility: { type: 'number', minimum: 1, maximum: 5 }, imageDataUrl: { type: 'string' } } },
   },
 }
 

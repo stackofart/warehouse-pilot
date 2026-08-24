@@ -4,17 +4,10 @@ import { OpenAIRecognitionError, normalizeOpenAIOrder } from './openai'
 describe('OpenAI order recognition result', () => {
   it('normalizes the structured response for the existing order workflow', () => {
     const result = normalizeOpenAIOrder({
-      rawText: 'אישור הזמנה מספר SO26017094',
+      rawText: 'לכבוד: פרטי לקוח שאסור לשמור\nאישור הזמנה מספר SO26017094',
       confidence: 91.6,
       orderNumber: 'SO 26017094',
-      customer: {
-        name: 'אמנדיה 100 מרכולים בע״מ',
-        address: 'ההגנה 53',
-        city: 'הרצליה',
-        phone: '052-540-1898',
-        customerNumber: '1 2 8 0',
-        raw: 'אמנדיה 100 מרכולים בע״מ\nההגנה 53',
-      },
+      summary: { itemCount: '25', totalQuantity: '506.00', packageCount: '26', totalWeightKg: '101.67' },
       items: [{
         address: '22f',
         sku: ' 5688 ',
@@ -29,8 +22,8 @@ describe('OpenAI order recognition result', () => {
     })
 
     expect(result.orderNumber).toBe('SO26017094')
-    expect(result.customer.phone).toBe('0525401898')
-    expect(result.customer.customerNumber).toBe('1280')
+    expect(result.text).not.toContain('פרטי לקוח')
+    expect(result.summary).toEqual({ itemCount: '25', totalQuantity: '506.00', packageCount: '26', totalWeightKg: '101.67' })
     expect(result.items[0]).toMatchObject({
       row: 1,
       address: '22.F',

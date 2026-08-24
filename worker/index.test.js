@@ -2,10 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import worker from './index.js'
 
 const recognizedOrder = {
-  rawText: 'SO26017094',
   confidence: 94,
   orderNumber: 'SO26017094',
-  customer: { name: '', address: '', city: '', phone: '', customerNumber: '', raw: '' },
+  summary: { itemCount: '1', totalQuantity: '18', packageCount: '1', totalWeightKg: '2.5' },
   items: [{
     address: '22.F',
     sku: '5688',
@@ -29,13 +28,14 @@ describe('OpenAI recognition Worker', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'openai_not_configured' })
   })
 
-  it('sends the image to the Responses API with a strict schema', async () => {
+  it('sends up to two images to the Responses API with a strict schema', async () => {
     const openAIFetch = vi.fn(async (_url, init) => {
       const requestBody = JSON.parse(init.body)
       expect(requestBody.model).toBe('gpt-5.6-luna')
       expect(requestBody.store).toBe(false)
       expect(requestBody.input[0].content[1]).toMatchObject({ type: 'input_image', detail: 'high' })
       expect(requestBody.input[0].content[1].image_url).toMatch(/^data:image\/jpeg;base64,/)
+      expect(requestBody.input[0].content[2]).toMatchObject({ type: 'input_image', detail: 'high' })
       expect(requestBody.text.format).toMatchObject({ type: 'json_schema', strict: true })
       expect(init.headers.authorization).toBe('Bearer test-key')
 
@@ -47,7 +47,8 @@ describe('OpenAI recognition Worker', () => {
     vi.stubGlobal('fetch', openAIFetch)
 
     const formData = new FormData()
-    formData.append('image', new Blob(['fake-jpeg'], { type: 'image/jpeg' }), 'order.jpg')
+    formData.append('images', new Blob(['fake-jpeg'], { type: 'image/jpeg' }), 'order-1.jpg')
+    formData.append('images', new Blob(['fake-jpeg-2'], { type: 'image/jpeg' }), 'order-2.jpg')
     const request = new Request('https://warehouse.example/api/recognize-order', { method: 'POST', body: formData })
     const response = await worker.fetch(request, {
       OPENAI_API_KEY: 'test-key',

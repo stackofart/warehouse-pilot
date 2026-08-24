@@ -16,6 +16,9 @@ export type Product = {
   fragility?: number
   imageDataUrl?: string
   technicalDataSource?: 'manual' | 'simulated' | 'imported'
+  verificationStatus?: 'verified' | 'unverified'
+  verificationSource?: 'manual' | 'imported' | 'recognition' | 'legacy'
+  verifiedAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -28,7 +31,7 @@ export type PhysicalSpec = {
 }
 
 export type ProductInput = Pick<Product, 'sku' | 'barcode' | 'name' | 'location'>
-  & Partial<Pick<Product, 'description' | 'unitsPerBox' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource'>>
+  & Partial<Pick<Product, 'description' | 'unitsPerBox' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource' | 'verificationStatus' | 'verificationSource' | 'verifiedAt'>>
   & { id?: string }
 
 export async function listProducts() {
@@ -67,15 +70,20 @@ export async function saveProduct(input: ProductInput, options: { overwriteExist
           transaction.oncomplete = () => resolve()
           transaction.onerror = () => reject(transaction.error ?? new Error('Не удалось дополнить товар'))
         })
-        return { product, updated: true }
+        return { product, updated: true, created: false }
       }
-      return { product: existing, updated: false }
+      return { product: existing, updated: false, created: false }
     }
     const now = new Date().toISOString()
     const product: Product = {
       ...existing,
       ...input,
       id: existing?.id ?? crypto.randomUUID(),
+      verificationStatus: input.verificationStatus ?? existing?.verificationStatus ?? 'verified',
+      verificationSource: input.verificationSource ?? existing?.verificationSource ?? 'manual',
+      verifiedAt: input.verificationStatus === 'unverified'
+        ? undefined
+        : input.verifiedAt ?? existing?.verifiedAt ?? now,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
@@ -87,45 +95,94 @@ export async function saveProduct(input: ProductInput, options: { overwriteExist
       transaction.onerror = () => reject(transaction.error ?? new Error('Не удалось сохранить товар'))
       transaction.onabort = () => reject(transaction.error ?? new Error('Сохранение товара отменено'))
     })
-    return { product, updated: Boolean(existing) }
+    return { product, updated: Boolean(existing), created: !existing }
   } finally {
     database.close()
   }
 }
 
 export async function saveOrderProducts(
-  items: Array<{ sku: string; barcode: string; description: string; address: string; unitsPerBox?: string }>,
-  overwriteExisting = true,
+  items: Array<{
+    sku: string
+    barcode: string
+    description: string
+    address: string
+    unitsPerBox?: string
+    catalogProductId?: string
+    productVerification?: 'verified' | 'unverified'
+  }>,
+  options: boolean | {
+    overwriteExisting?: boolean
+    newProductVerification?: 'verified' | 'unverified'
+    source?: 'manual' | 'imported' | 'recognition'
+  } = {},
 ) {
+  const resolved = typeof options === 'boolean'
+    ? { overwriteExisting: options, newProductVerification: 'verified' as const, source: 'imported' as const }
+    : {
+        overwriteExisting: options.overwriteExisting ?? false,
+        newProductVerification: options.newProductVerification ?? 'unverified',
+        source: options.source ?? 'recognition',
+      }
   let saved = 0
   let skipped = 0
+  let matchedExisting = 0
+  let incomplete = 0
   let conflicts = 0
 
   for (const item of items) {
+    if (item.catalogProductId) {
+      skipped += 1
+      matchedExisting += 1
+      continue
+    }
     const input = {
       sku: item.sku.replace(/\D/g, ''),
       barcode: item.barcode.replace(/\D/g, ''),
       name: item.description.trim(),
       location: item.address.trim().toUpperCase(),
       ...(Number(item.unitsPerBox) > 0 ? { unitsPerBox: Number(item.unitsPerBox) } : {}),
+      verificationStatus: item.productVerification ?? resolved.newProductVerification,
+      verificationSource: resolved.source,
     }
     if (!input.sku || !input.barcode || !input.name || !input.location) {
       skipped += 1
+      incomplete += 1
       continue
     }
 
     try {
-      const result = await saveProduct(input, { overwriteExisting })
+      const result = await saveProduct(input, { overwriteExisting: resolved.overwriteExisting })
       const estimate = simulateProductTechnicalData(result.product)
       if (estimate) await saveProduct(estimate)
-      saved += 1
+      if (result.created) saved += 1
+      else {
+        skipped += 1
+        matchedExisting += 1
+      }
     } catch (reason) {
       console.warn('Product from order was not saved', reason)
       conflicts += 1
     }
   }
 
-  return { saved, skipped, conflicts }
+  return { saved, skipped, matchedExisting, incomplete, conflicts }
+}
+
+export function isProductVerified(product: Pick<Product, 'verificationStatus'>) {
+  return product.verificationStatus !== 'unverified'
+}
+
+export async function setProductVerification(id: string, verificationStatus: 'verified' | 'unverified') {
+  const products = await listProducts()
+  const product = products.find((candidate) => candidate.id === id)
+  if (!product) throw new Error('Товар не найден')
+  return saveProduct({
+    ...product,
+    verificationStatus,
+    verificationSource: 'manual',
+    verifiedAt: verificationStatus === 'verified' ? new Date().toISOString() : undefined,
+  })
 }
 
 export async function deleteProduct(id: string) {

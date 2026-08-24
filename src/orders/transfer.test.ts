@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { orderImportExample, orderImportInstructions, OrderImportValidationError, parseOrderDocument } from './transfer'
+import { createOrdersDatabaseExport, orderImportExample, orderImportInstructions, OrderImportValidationError, parseOrderDocument } from './transfer'
+import type { SavedOrder } from './storage'
 
 function issuesFrom(text: string) {
   try {
@@ -17,7 +18,7 @@ describe('order JSON import', () => {
     value.order.items[0].address = '23.f'
     const parsed = parseOrderDocument(JSON.stringify(value))
     expect(parsed.order.orderNumber).toBe('SO26017112')
-    expect(parsed.order.notes).toBe('Позвонить заказчику перед отгрузкой')
+    expect(parsed.order.notes).toBe('Проверить замену перед сборкой')
     expect(parsed.order.items[0]).toMatchObject({ address: '23.F', quantity: 48, unitsPerBox: 24, boxCount: 2 })
   })
 
@@ -54,5 +55,16 @@ describe('order JSON import', () => {
     expect(orderImportInstructions).toContain('quantity = unitsPerBox × boxCount')
     expect(orderImportInstructions).toContain('warehouse-pilot.order')
     expect(orderImportInstructions).toContain('Неизвестные поля запрещены')
+  })
+
+  it('exports the complete order store without legacy customer data', () => {
+    const order: SavedOrder = {
+      id: 'o1', orderNumber: 'SO1', items: [], rawText: '', sourceFileName: 'one.jpg', createdAt: '', updatedAt: '',
+      customer: { name: 'legacy customer' },
+    }
+    const backup = createOrdersDatabaseExport([order])
+    expect(backup.orders).toHaveLength(1)
+    expect(backup.orders[0]).not.toHaveProperty('customer')
+    expect(backup.orders[0].sourceFileNames).toEqual(['one.jpg'])
   })
 })

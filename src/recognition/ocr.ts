@@ -17,22 +17,25 @@ export type RecognizedOrderItem = {
   boxCount: string
   confidence: number
   warnings: string[]
+  productVerification?: 'verified' | 'unverified'
+  catalogProductId?: string
+  catalogMatchScore?: number
+  catalogMatchReason?: 'barcode' | 'sku' | 'identifiers' | 'combined' | 'none'
+  catalogCorrectedFields?: Array<'address' | 'sku' | 'barcode' | 'description' | 'unitsPerBox'>
 }
 
-export type RecognizedCustomer = {
-  name: string
-  address: string
-  city: string
-  phone: string
-  customerNumber: string
-  raw: string
+export type RecognizedOrderSummary = {
+  itemCount: string
+  totalQuantity: string
+  packageCount: string
+  totalWeightKg: string
 }
 
 export type OcrResult = {
   text: string
   confidence: number
   orderNumber: string
-  customer: RecognizedCustomer
+  summary: RecognizedOrderSummary
   items: RecognizedOrderItem[]
   validRowCount: number
   tablePreviewUrl: string
@@ -177,62 +180,47 @@ function parseOrderNumber(...sources: string[]) {
   return ''
 }
 
-function parseCustomer(raw: string, numericRaw = '', customerNumberRaw = '', phoneNumberRaw = ''): RecognizedCustomer {
-  const allLines = raw.split(/\r?\n/).map(cleanOcrLine).filter(Boolean)
-  const honorIndex = allLines.findIndex((line) => line.includes('לכבוד'))
-  const relevant = (honorIndex >= 0 ? allLines.slice(honorIndex + 1) : allLines)
-    .filter((line) => !/^(לכבוד|תאריך|אישור הזמנה)/.test(line))
+export function emptyOrderSummary(): RecognizedOrderSummary {
+  return { itemCount: '', totalQuantity: '', packageCount: '', totalWeightKg: '' }
+}
 
-  const phoneLine = relevant.find((line) => /טלפון|טלפ|05\D*\d{8}/.test(line)) ?? ''
-  const customerNumberLine = relevant.find((line) => /לקוח/.test(line)) ?? ''
-  const supplementalLines = numericRaw.split(/\r?\n/).map(cleanOcrLine).filter(Boolean)
-  const supplementalPhoneLine = supplementalLines.find((line) => /טלפון|טלפ/.test(line)) ?? ''
-  const supplementalCustomerLine = supplementalLines.find((line) => /לקוח/.test(line)) ?? ''
-  const numericCandidates = numericRaw.match(/\d{3,12}/g) ?? []
-  const phoneSource = `${phoneNumberRaw}\n${phoneLine}\n${supplementalPhoneLine}\n${numericRaw}`
-  const phone = (phoneSource.match(/05\d{8}/)?.[0]
-    ?? (phoneLine.match(/\d[\d\s-]{6,}\d/)?.[0] ?? numericCandidates.find((value) => value.length >= 8) ?? '').replace(/\D/g, '').slice(0, 10)
-  ).slice(0, 10)
-  const targetedCustomerNumbers = customerNumberRaw.match(/\d{3,7}/g) ?? []
-  const rawCustomerNumber = targetedCustomerNumbers.at(-1)
-    ?? customerNumberLine.match(/\d{3,8}/)?.[0]
-    ?? supplementalCustomerLine.match(/\d{3,8}/)?.[0]
-    ?? numericCandidates.find((value) => value !== phone && value.length >= 3 && value.length <= 7)
-    ?? ''
-  const customerNumber = /^\d{4}0$/.test(rawCustomerNumber)
-    ? rawCustomerNumber.slice(0, -1)
-    : rawCustomerNumber
-  const identityLines = relevant
-    .filter((line) => line !== phoneLine && line !== customerNumberLine)
-    .filter((line) => !/פקס|עוסק|ניכויים|איחוד עוסקים|מדווח/.test(line))
-    .slice(0, 6)
-
-  const addressIndex = identityLines.findIndex((line) =>
-    /\p{L}[\p{L}\s.'"״׳()-]*\d{1,4}$/u.test(line) && !/שעות/.test(line),
-  )
-  const address = (addressIndex >= 0 ? identityLines[addressIndex] : identityLines[1] ?? '')
-    .replace(/([\p{L}])(\d)/gu, '$1 $2')
-    .replace(/(\d)([\p{L}])/gu, '$1 $2')
-  const city = identityLines.find((line, index) => index > addressIndex && /^[\p{L}\s.'"״׳()-]+$/u.test(line)) ?? ''
-  const nameLines = addressIndex > 0 ? identityLines.slice(0, addressIndex) : identityLines.slice(0, 1)
-  const rawName = nameLines.join(' ')
-    .replace(/שעות\s*בע\s*["״']?מ/u, 'שעות בע"מ')
-    .replace(/\s*\(/g, ' (')
-  const name = (city && rawName.endsWith(city)
-    ? `${rawName.slice(0, -city.length).trim()} ${city}`.trim()
-    : rawName).trim()
-  const rawLines = relevant.slice(0, 7)
-  if (phone && !rawLines.some((line) => line.includes(phone))) rawLines.push(`טלפון: ${phone}`)
-  if (customerNumber && !rawLines.some((line) => line.includes(customerNumber))) rawLines.push(`מס. לקוח: ${customerNumber}`)
-
-  return {
-    name,
-    address,
-    city,
-    phone,
-    customerNumber,
-    raw: rawLines.join('\n'),
+function numberNearLabel(text: string, label: RegExp) {
+  for (const line of text.split(/\r?\n/).map(cleanOcrLine)) {
+    if (!label.test(line)) continue
+    label.lastIndex = 0
+    const match = line.match(label)
+    if (!match) continue
+    const matchIndex = match.index ?? 0
+    const after = line.slice(matchIndex + match[0].length).match(/\d+(?:[.,]\d+)?/)
+    if (after) return after[0].replace(',', '.')
+    const before = line.slice(0, matchIndex).match(/\d+(?:[.,]\d+)?(?=\D*$)/)
+    if (before) return before[0].replace(',', '.')
   }
+  return ''
+}
+
+export function parseOrderSummary(text: string): RecognizedOrderSummary {
+  return {
+    itemCount: numberNearLabel(text, /מס['׳״.\s]*פריטים/u),
+    totalQuantity: numberNearLabel(text, /סה["״']?כ\s*כמות/u),
+    packageCount: numberNearLabel(text, /מס['׳״.\s]*אריזות/u),
+    totalWeightKg: numberNearLabel(text, /משקל/u),
+  }
+}
+
+export function formatRecognizedOrderText(orderNumber: string, items: RecognizedOrderItem[], summary: RecognizedOrderSummary) {
+  const lines = [orderNumber ? `Заказ: ${orderNumber}` : 'Заказ без распознанного номера']
+  for (const item of items) {
+    lines.push(`${item.row}. ${item.address} | ${item.sku} | ${item.barcode} | ${item.description} | ${item.unitsPerBox} × ${item.boxCount} = ${item.quantity}`)
+  }
+  const totals = [
+    summary.itemCount ? `позиций ${summary.itemCount}` : '',
+    summary.totalQuantity ? `количество ${summary.totalQuantity}` : '',
+    summary.packageCount ? `упаковок ${summary.packageCount}` : '',
+    summary.totalWeightKg ? `вес ${summary.totalWeightKg} кг` : '',
+  ].filter(Boolean)
+  if (totals.length) lines.push(`Итоги: ${totals.join(' · ')}`)
+  return lines.join('\n')
 }
 
 async function buildImageRegion(
@@ -507,47 +495,27 @@ export async function recognizeOrderImage(
       )
     }
 
-    currentStage = 'reading customer'
-    stageStart = .82
-    stageSpan = .06
-    const customerRegion = await buildImageRegion(image, { x: .53, y: .075, width: .45, height: .215 })
-    await worker.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: PSM.SPARSE_TEXT })
-    const { data: customerData } = await worker.recognize(customerRegion)
-
-    const customerNumbersRegion = await buildImageRegion(image, { x: .7, y: .235, width: .28, height: .075 })
-    await worker.setParameters({ tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: PSM.SPARSE_TEXT })
-    const { data: customerNumbersData } = await worker.recognize(customerNumbersRegion)
-
-    const customerPhoneRegion = await buildImageRegion(image, { x: .79, y: .282, width: .19, height: .025 }, 6)
-    const { data: customerPhoneData } = await worker.recognize(customerPhoneRegion)
-
-    const customerNumberRegion = await buildImageRegion(image, { x: .79, y: .3, width: .19, height: .028 }, 6)
-    const { data: customerNumberData } = await worker.recognize(customerNumberRegion)
-
     currentStage = 'reading order number'
-    stageStart = .88
+    stageStart = .82
     stageSpan = .04
     const orderRegion = await buildImageRegion(image, { x: .24, y: .22, width: .62, height: .13 })
     const { data: orderData } = await worker.recognize(orderRegion)
 
     currentStage = 'reading document'
-    stageStart = .92
-    stageSpan = .07
+    stageStart = .86
+    stageSpan = .13
     await worker.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: PSM.AUTO })
     const { data } = await worker.recognize(image, { rotateAuto: true })
     const items = makeItems({ addresses, skus, barcodes, descriptions, quantities, unitsPerBox, boxCounts })
     const validRowCount = items.filter((item) => item.warnings.length === 0).length
 
+    const orderNumber = parseOrderNumber(orderData.text, data.text)
+    const summary = parseOrderSummary(data.text)
     return {
-      text: data.text.trim(),
+      text: formatRecognizedOrderText(orderNumber, items, summary),
       confidence: Math.round(data.confidence),
-      orderNumber: parseOrderNumber(orderData.text, data.text),
-      customer: parseCustomer(
-        customerData.text,
-        `${customerNumbersData.text}\n${data.text}`,
-        customerNumberData.text,
-        customerPhoneData.text,
-      ),
+      orderNumber,
+      summary,
       items,
       validRowCount,
       tablePreviewUrl: table.previewUrl,

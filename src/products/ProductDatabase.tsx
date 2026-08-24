@@ -1,6 +1,6 @@
-import { Barcode, Boxes, CheckCircle2, ChevronDown, ChevronUp, Database, Download, FileJson, FileUp, ImagePlus, MapPin, PackagePlus, Pencil, Search, Trash2, WandSparkles, X } from 'lucide-react'
+import { AlertTriangle, Barcode, Boxes, CheckCircle2, ChevronDown, ChevronUp, Database, Download, FileJson, FileUp, ImagePlus, MapPin, PackagePlus, Pencil, Search, ShieldCheck, Trash2, WandSparkles, X } from 'lucide-react'
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from 'react'
-import { clearProducts, deleteProduct, listProducts, saveProduct, type Product } from './storage'
+import { clearProducts, deleteProduct, isProductVerified, listProducts, saveProduct, setProductVerification, type Product } from './storage'
 import { simulateProductTechnicalData } from './simulation'
 import { createProductDocument, importProductDocument, parseProductDocument, productImportExample, productJsonSchema, type ProductConflict } from './transfer'
 
@@ -122,6 +122,9 @@ export function ProductDatabase() {
       fragility: optionalNumber(form.fragility),
       imageDataUrl: form.imageDataUrl || undefined,
       technicalDataSource: 'manual' as const,
+      verificationStatus: 'verified' as const,
+      verificationSource: 'manual' as const,
+      verifiedAt: new Date().toISOString(),
     }
 
     if (!product.sku || !product.barcode || !product.name || !product.location) {
@@ -258,6 +261,22 @@ export function ProductDatabase() {
     }
   }
 
+  const verifyProduct = async (product: Product) => {
+    setIsSaving(true)
+    try {
+      await setProductVerification(product.id, 'verified')
+      await refreshProducts()
+      setMessage(`Товар «${product.name}» подтверждён`)
+    } catch (reason) {
+      console.error(reason)
+      setError('Не удалось подтвердить товар')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const unverifiedCount = products.filter((product) => !isProductVerified(product)).length
+
   return (
     <div className="page products-page">
       <div className="page-heading products-heading">
@@ -266,7 +285,7 @@ export function ProductDatabase() {
           <h1>Локальная база товаров</h1>
           <p>Свяжите מק״ט и штрихкод с названием товара и его адресом на складе.</p>
         </div>
-        <div className="product-count"><Database size={17} /><div><strong>{products.length}</strong><span>товаров сохранено</span></div></div>
+        <div className="product-count"><Database size={17} /><div><strong>{products.length}</strong><span>{unverifiedCount ? `${unverifiedCount} требуют проверки` : 'все товары проверены'}</span></div></div>
       </div>
 
       <section className="product-tools" aria-label="Инструменты базы товаров">
@@ -353,11 +372,12 @@ export function ProductDatabase() {
               {visibleProducts.map((product) => {
                 const expanded = expandedProductId === product.id
                 return (
-                  <article className={`product-directory-item ${expanded ? 'expanded' : ''}`} key={product.id} role="listitem">
+                  <article className={`product-directory-item ${expanded ? 'expanded' : ''} ${isProductVerified(product) ? 'product-verified' : 'product-unverified'}`} key={product.id} role="listitem">
                     <button className="product-directory-summary" type="button" aria-expanded={expanded} aria-controls={`product-extra-${product.id}`} onClick={() => setExpandedProductId((current) => current === product.id ? '' : product.id)}>
                       <span className="product-directory-primary">
                         <strong dir="auto">{product.name}</strong>
                         <span className="location-badge"><MapPin size={14} />{product.location}</span>
+                        <span className={`verification-badge ${isProductVerified(product) ? 'verified' : 'unverified'}`}>{isProductVerified(product) ? <ShieldCheck size={13} /> : <AlertTriangle size={13} />}{isProductVerified(product) ? 'Проверен' : 'Не проверен'}</span>
                       </span>
                       <span className="product-directory-code product-directory-barcode"><small>Штрихкод</small><b><Barcode size={14} />{product.barcode}</b></span>
                       <span className="product-directory-code"><small>מק״ט</small><b>{product.sku}</b></span>
@@ -372,7 +392,7 @@ export function ProductDatabase() {
                       </div>
                       <div className="product-detail-footer">
                         <div className="product-detail-facts"><span><b>{product.unitsPerBox ?? '—'}</b> шт. в коробке</span><span>{productHasPackingData(product) ? <><b>{product.boxSpec?.lengthCm}×{product.boxSpec?.widthCm}×{product.boxSpec?.heightCm} см</b> · {product.boxSpec?.weightKg} кг</> : 'Габариты ещё не заданы'}</span></div>
-                        <div className="table-product-actions"><button className="table-edit-button" type="button" aria-label={`Редактировать ${product.name}`} onClick={() => editProduct(product)}><Pencil size={16} />Редактировать</button><button className="table-delete-button" type="button" aria-label={`Удалить ${product.name}`} onClick={() => setConfirmAction({ type: 'delete', product })}><Trash2 size={16} />Удалить</button></div>
+                        <div className="table-product-actions">{!isProductVerified(product) && <button className="table-verify-button" type="button" disabled={isSaving} onClick={() => void verifyProduct(product)}><ShieldCheck size={16} />Подтвердить</button>}<button className="table-edit-button" type="button" aria-label={`Редактировать ${product.name}`} onClick={() => editProduct(product)}><Pencil size={16} />Редактировать</button><button className="table-delete-button" type="button" aria-label={`Удалить ${product.name}`} onClick={() => setConfirmAction({ type: 'delete', product })}><Trash2 size={16} />Удалить</button></div>
                       </div>
                     </div>}
                   </article>

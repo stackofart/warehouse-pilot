@@ -26,18 +26,20 @@ import {
   Warehouse,
 } from 'lucide-react'
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react'
-import { recognizeOrderImage, validateOrderItem, type RecognizedCustomer, type RecognizedOrderItem } from './recognition/ocr'
+import { emptyOrderSummary, formatRecognizedOrderText, recognizeOrderImage, validateOrderItem, type RecognizedOrderItem, type RecognizedOrderSummary } from './recognition/ocr'
 import { OpenAIRecognitionError, recognizeOrderImageWithOpenAI } from './recognition/openai'
+import { mergeOcrResults } from './recognition/merge'
 import { OrdersDatabase } from './orders/OrdersDatabase'
 import { listOrders, saveOrder } from './orders/storage'
 import { ProductDatabase } from './products/ProductDatabase'
 import { PalletWorkspace } from './pallet/PalletWorkspace'
-import { saveOrderProducts } from './products/storage'
+import { listProducts, saveOrderProducts } from './products/storage'
+import { reconcileRecognizedItems } from './products/reconciliation'
 import { OrderWorkflow } from './fulfillment/OrderWorkflow'
 import { WarehouseMap } from './warehouse/WarehouseMap'
 import './App.css'
 
-type OcrState = 'idle' | 'working' | 'success' | 'error'
+type OcrState = 'idle' | 'ready' | 'working' | 'success' | 'error'
 type RecognitionMode = 'openai' | 'local'
 type AppSection = 'new-order' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'pallet'
 
@@ -68,7 +70,6 @@ const statusLabels: Record<string, string> = {
   'reading descriptions': 'Распознавание товаров',
   'verifying barcodes': 'Повторная проверка штрихкодов',
   'verifying descriptions': 'Повторная проверка описаний',
-  'reading customer': 'Распознавание заказчика',
   'reading order number': 'Распознавание номера заказа',
   'reading document': 'Финальная проверка документа',
   'preparing AI image': 'Подготовка изображения для OpenAI',
@@ -77,20 +78,11 @@ const statusLabels: Record<string, string> = {
   'validating AI result': 'Проверка распознанных данных',
 }
 
-const emptyCustomer: RecognizedCustomer = {
-  name: '',
-  address: '',
-  city: '',
-  phone: '',
-  customerNumber: '',
-  raw: '',
-}
-
 function App() {
   const recognitionRun = useRef(0)
   const [isDragging, setIsDragging] = useState(false)
-  const [file, setFile] = useState<File | null>(null)
-  const [previewUrl, setPreviewUrl] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [previewUrls, setPreviewUrls] = useState<string[]>([])
   const [ocrState, setOcrState] = useState<OcrState>('idle')
   const [recognitionMode, setRecognitionMode] = useState<RecognitionMode>('openai')
   const [recognitionProvider, setRecognitionProvider] = useState<RecognitionMode>('openai')
@@ -102,7 +94,7 @@ function App() {
   const [items, setItems] = useState<RecognizedOrderItem[]>([])
   const [orderNumber, setOrderNumber] = useState('')
   const [orderNotes, setOrderNotes] = useState('')
-  const [customer, setCustomer] = useState<RecognizedCustomer>(emptyCustomer)
+  const [orderSummary, setOrderSummary] = useState<RecognizedOrderSummary>(emptyOrderSummary)
   const [tablePreviewUrl, setTablePreviewUrl] = useState('')
   const [perspectiveCorrected, setPerspectiveCorrected] = useState(false)
   const [error, setError] = useState('')
@@ -125,11 +117,12 @@ function App() {
 
   useEffect(() => {
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      previewUrls.forEach((url) => URL.revokeObjectURL(url))
     }
-  }, [previewUrl])
+  }, [previewUrls])
 
-  const runRecognition = async (image: File, mode: RecognitionMode = recognitionMode) => {
+  const runRecognition = async (images: File[], mode: RecognitionMode = recognitionMode) => {
+    if (!images.length) return
     const runId = ++recognitionRun.current
     setRecognitionProvider(mode)
     setRecognitionModel('')
@@ -140,7 +133,7 @@ function App() {
     setItems([])
     setOrderNumber('')
     setOrderNotes('')
-    setCustomer(emptyCustomer)
+    setOrderSummary(emptyOrderSummary())
     setTablePreviewUrl('')
     setConfidence(null)
     setPerspectiveCorrected(false)
@@ -151,22 +144,37 @@ function App() {
     setProductSyncMessage('')
 
     try {
-      const recognize = mode === 'openai' ? recognizeOrderImageWithOpenAI : recognizeOrderImage
-      const result = await recognize(image, ({ progress: value, status }) => {
-        if (runId !== recognitionRun.current) return
-        setProgress(Math.max(0, Math.min(100, Math.round(value * 100))))
-        setProgressLabel(statusLabels[status] ?? 'Обработка изображения')
-      })
+      let result
+      if (mode === 'openai') {
+        result = await recognizeOrderImageWithOpenAI(images, ({ progress: value, status }) => {
+            if (runId !== recognitionRun.current) return
+            setProgress(Math.max(0, Math.min(100, Math.round(value * 100))))
+            setProgressLabel(statusLabels[status] ?? 'Обработка изображений')
+          })
+      } else {
+        const localResults = []
+        for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
+          localResults.push(await recognizeOrderImage(images[imageIndex], ({ progress: value, status }) => {
+            if (runId !== recognitionRun.current) return
+            const combined = (imageIndex + value) / images.length
+            setProgress(Math.max(0, Math.min(100, Math.round(combined * 100))))
+            setProgressLabel(`${statusLabels[status] ?? 'Обработка изображения'} · фото ${imageIndex + 1}/${images.length}`)
+          }))
+        }
+        result = mergeOcrResults(localResults)
+      }
       if (runId !== recognitionRun.current) return
-      setRecognizedText(result.text)
+      const reconciliation = reconcileRecognizedItems(result.items, await listProducts())
+      setRecognizedText(formatRecognizedOrderText(result.orderNumber, reconciliation.items, result.summary))
       setConfidence(result.confidence)
-      setItems(result.items)
+      setItems(reconciliation.items)
       setOrderNumber(result.orderNumber)
-      setCustomer(result.customer)
+      setOrderSummary(result.summary)
       setTablePreviewUrl(result.tablePreviewUrl)
       setPerspectiveCorrected(result.usedPerspectiveCorrection)
       setRecognitionProvider(result.provider === 'openai' ? 'openai' : 'local')
       setRecognitionModel(result.model ?? '')
+      setProductSyncMessage(`${reconciliation.matched} строк сопоставлено с базой · ${reconciliation.corrected} исправлено · ${reconciliation.unverified} требуют проверки`)
       setProgress(100)
       setOcrState('success')
     } catch (reason) {
@@ -179,45 +187,52 @@ function App() {
     }
   }
 
-  const selectFile = (selected: File | undefined) => {
-    if (!selected) return
-    if (!selected.type.startsWith('image/')) {
+  const selectFiles = (selected: File[], append = false) => {
+    if (!selected.length) return
+    const nextFiles = (append ? [...files, ...selected] : selected).slice(0, 2)
+    if (nextFiles.some((file) => !file.type.startsWith('image/'))) {
       setError('Выберите изображение в формате JPG, PNG, HEIC или WebP.')
       setOcrState('error')
       return
     }
-    if (selected.size > 20 * 1024 * 1024) {
-      setError('Размер изображения превышает 20 МБ. Выберите файл меньшего размера.')
+    if (nextFiles.some((file) => file.size > 20 * 1024 * 1024)) {
+      setError('Размер одного из изображений превышает 20 МБ. Выберите файл меньшего размера.')
       setOcrState('error')
       return
     }
 
-    setFile(selected)
-    setPreviewUrl(URL.createObjectURL(selected))
-    void runRecognition(selected)
+    setFiles(nextFiles)
+    setPreviewUrls(nextFiles.map((file) => URL.createObjectURL(file)))
+    setError(selected.length + (append ? files.length : 0) > 2 ? 'Можно обработать не более двух фотографий. Выбраны первые две.' : '')
+    setOcrState('ready')
   }
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => {
-    selectFile(event.target.files?.[0])
+    selectFiles(Array.from(event.target.files ?? []))
+    event.target.value = ''
+  }
+
+  const handleAdditionalInput = (event: ChangeEvent<HTMLInputElement>) => {
+    selectFiles(Array.from(event.target.files ?? []), true)
     event.target.value = ''
   }
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
-    selectFile(event.dataTransfer.files?.[0])
+    selectFiles(Array.from(event.dataTransfer.files ?? []))
   }
 
   const clearOrder = () => {
     recognitionRun.current += 1
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    setPreviewUrl('')
-    setFile(null)
+    previewUrls.forEach((url) => URL.revokeObjectURL(url))
+    setPreviewUrls([])
+    setFiles([])
     setRecognizedText('')
     setItems([])
     setOrderNumber('')
     setOrderNotes('')
-    setCustomer(emptyCustomer)
+    setOrderSummary(emptyOrderSummary())
     setTablePreviewUrl('')
     setConfidence(null)
     setPerspectiveCorrected(false)
@@ -236,12 +251,22 @@ function App() {
     setItems((current) => current.map((item) => {
       if (item.row !== row) return item
       const updated = { ...item, [field]: value }
-      return { ...updated, warnings: validateOrderItem(updated) }
+      const changesProductIdentity = ['address', 'sku', 'barcode', 'description', 'unitsPerBox'].includes(field)
+      return {
+        ...updated,
+        warnings: validateOrderItem(updated),
+        ...(changesProductIdentity ? {
+          productVerification: 'unverified' as const,
+          catalogProductId: undefined,
+          catalogMatchReason: 'none' as const,
+          catalogCorrectedFields: [],
+        } : {}),
+      }
     }))
   }
 
-  const updateCustomer = (field: keyof RecognizedCustomer, value: string) => {
-    setCustomer((current) => ({ ...current, [field]: value }))
+  const updateSummary = (field: keyof RecognizedOrderSummary, value: string) => {
+    setOrderSummary((current) => ({ ...current, [field]: value.replace(/[^\d.,]/g, '').replace(',', '.') }))
     setSaveState('idle')
   }
 
@@ -254,17 +279,19 @@ function App() {
         createdAt: savedCreatedAt || undefined,
         orderNumber,
         notes: orderNotes.trim(),
-        customer,
+        summary: orderSummary,
         items,
         rawText: recognizedText,
-        sourceFileName: file?.name ?? '',
+        sourceFileName: files[0]?.name ?? '',
+        sourceFileNames: files.map((file) => file.name),
       })
-      const productResult = await saveOrderProducts(items)
+      const productResult = await saveOrderProducts(items, { overwriteExisting: false, newProductVerification: 'unverified', source: 'recognition' })
       setSavedOrderId(saved.id)
       setSavedCreatedAt(saved.createdAt)
       setProductSyncMessage([
-        `${productResult.saved} товаров добавлено или обновлено`,
-        productResult.skipped ? `${productResult.skipped} пропущено из-за пустых полей` : '',
+        `${productResult.saved} новых товаров добавлено как непроверенные`,
+        productResult.matchedExisting ? `${productResult.matchedExisting} уже связаны с базой` : '',
+        productResult.incomplete ? `${productResult.incomplete} не добавлено из-за пустых полей` : '',
         productResult.conflicts ? `${productResult.conflicts} конфликтов` : '',
       ].filter(Boolean).join(' · '))
       setSaveState('saved')
@@ -361,21 +388,35 @@ function App() {
                     </button>
                   </div>
                   <div className="upload-actions">
-                    <label className="primary-button file-picker-trigger"><Upload size={18} />Выбрать файл<input className="file-picker-input" aria-label="Выбрать изображение заказа" type="file" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" onChange={handleInput} /></label>
+                    <label className="primary-button file-picker-trigger"><Upload size={18} />Выбрать 1–2 фото<input className="file-picker-input" aria-label="Выбрать изображения заказа" type="file" multiple accept="image/jpeg,image/png,image/heic,image/heif,image/webp" onChange={handleInput} /></label>
                     <label className="secondary-button file-picker-trigger"><Camera size={18} />Сделать фото<input className="file-picker-input" aria-label="Сделать фото заказа" type="file" accept="image/*" capture="environment" onChange={handleInput} /></label>
                   </div>
-                  <small className="file-hint">JPG, PNG, HEIC или WebP · до 20 МБ</small>
+                  <small className="file-hint">До двух фото · JPG, PNG, HEIC или WebP · каждое до 20 МБ</small>
                 </div>
               ) : (
                 <div className="recognition-view">
                   <div className="recognition-header">
-                    <div><span className="section-kicker">ИЗОБРАЖЕНИЕ ЗАКАЗА</span><h2>{file?.name}</h2></div>
+                    <div><span className="section-kicker">ИЗОБРАЖЕНИЯ ЗАКАЗА</span><h2>{files.length} из 2 фото выбрано</h2></div>
                     <button className="icon-button" type="button" onClick={clearOrder} aria-label="Удалить изображение"><Trash2 size={18} /></button>
                   </div>
 
                   <div className="recognition-body">
-                    <div className="image-preview"><img src={previewUrl} alt="Загруженный лист заказа" /><span><FileImage size={15} />{file ? `${(file.size / 1024 / 1024).toFixed(1)} МБ` : ''}</span></div>
+                    <div className={`image-preview-grid ${files.length > 1 ? 'two-images' : ''}`}>
+                      {files.map((image, index) => <div className="image-preview" key={`${image.name}-${image.lastModified}`}><img src={previewUrls[index]} alt={`Лист заказа, фото ${index + 1}`} /><span><FileImage size={15} />Фото {index + 1} · {(image.size / 1024 / 1024).toFixed(1)} МБ</span></div>)}
+                    </div>
                     <div className="result-area">
+                      {ocrState === 'ready' && (
+                        <div className="ready-state">
+                          <div className="processing-icon"><FileImage size={30} /></div>
+                          <h3>{files.length === 2 ? 'Оба фото готовы' : 'Фото готово к распознаванию'}</h3>
+                          <p>{files.length === 1 ? 'Если заказ продолжается ниже, добавьте второе фото.' : 'Строки с двух фото будут объединены в один заказ.'}</p>
+                          {error && <span className="selection-warning">{error}</span>}
+                          <div className="ready-actions">
+                            <button className="primary-button" type="button" onClick={() => void runRecognition(files)}><Sparkles size={17} />Распознать {files.length === 2 ? '2 фото' : 'фото'}</button>
+                            {files.length < 2 && <label className="secondary-button file-picker-trigger"><Camera size={17} />Добавить второе фото<input className="file-picker-input" aria-label="Добавить второе фото заказа" type="file" accept="image/*" capture="environment" onChange={handleAdditionalInput} /></label>}
+                          </div>
+                        </div>
+                      )}
                       {ocrState === 'working' && (
                         <div className="processing-state">
                           <div className="processing-icon"><ScanLine size={30} /></div>
@@ -389,7 +430,7 @@ function App() {
                       )}
 
                       {ocrState === 'error' && (
-                        <div className="error-state"><h3>Распознавание не завершено</h3><p>{error}</p><div className="recognition-retry-actions"><button className="primary-button" type="button" onClick={() => file && void runRecognition(file, recognitionProvider)}><RefreshCw size={17} />Попробовать снова</button>{recognitionProvider === 'openai' && <button className="secondary-button" type="button" onClick={() => file && void runRecognition(file, 'local')}><ShieldCheck size={17} />Распознать локально</button>}</div></div>
+                        <div className="error-state"><h3>Распознавание не завершено</h3><p>{error}</p><div className="recognition-retry-actions"><button className="primary-button" type="button" onClick={() => void runRecognition(files, recognitionProvider)}><RefreshCw size={17} />Попробовать снова</button>{recognitionProvider === 'openai' && <button className="secondary-button" type="button" onClick={() => void runRecognition(files, 'local')}><ShieldCheck size={17} />Распознать локально</button>}</div></div>
                       )}
 
                       {ocrState === 'success' && (
@@ -423,9 +464,9 @@ function App() {
                         </div>
                       </div>
 
-                      <section className="order-metadata" aria-label="Данные заказа и заказчика">
+                      <section className="order-metadata" aria-label="Данные заказа">
                         <div className="metadata-heading">
-                          <div><span className="section-kicker">РЕКВИЗИТЫ</span><h4>Заказ и заказчик</h4></div>
+                          <div><span className="section-kicker">РЕКВИЗИТЫ</span><h4>Номер и итоги заказа</h4></div>
                           <div className="metadata-status">
                             {saveState === 'error' && <span className="save-error">Не удалось сохранить</span>}
                             {saveState === 'saved' && productSyncMessage && <span className="product-sync-message">{productSyncMessage}</span>}
@@ -433,13 +474,11 @@ function App() {
                         </div>
                         <div className="metadata-grid">
                           <label><span>Номер заказа</span><input aria-label="Номер заказа" value={orderNumber} onChange={(event) => { setOrderNumber(event.target.value.toUpperCase()); setSaveState('idle') }} /></label>
-                          <label><span>Номер клиента</span><input aria-label="Номер клиента" inputMode="numeric" value={customer.customerNumber} onChange={(event) => updateCustomer('customerNumber', event.target.value)} /></label>
-                          <label className="wide"><span>Название заказчика</span><input aria-label="Название заказчика" dir="rtl" value={customer.name} onChange={(event) => updateCustomer('name', event.target.value)} /></label>
-                          <label><span>Адрес</span><input aria-label="Адрес заказчика" dir="rtl" value={customer.address} onChange={(event) => updateCustomer('address', event.target.value)} /></label>
-                          <label><span>Город</span><input aria-label="Город заказчика" dir="rtl" value={customer.city} onChange={(event) => updateCustomer('city', event.target.value)} /></label>
-                          <label><span>Телефон</span><input aria-label="Телефон заказчика" inputMode="tel" value={customer.phone} onChange={(event) => updateCustomer('phone', event.target.value)} /></label>
+                          <label><span>Позиций по документу</span><input aria-label="Количество позиций по документу" inputMode="decimal" value={orderSummary.itemCount} onChange={(event) => updateSummary('itemCount', event.target.value)} /></label>
+                          <label><span>Общее количество</span><input aria-label="Общее количество товара" inputMode="decimal" value={orderSummary.totalQuantity} onChange={(event) => updateSummary('totalQuantity', event.target.value)} /></label>
+                          <label><span>Всего упаковок</span><input aria-label="Общее количество упаковок" inputMode="decimal" value={orderSummary.packageCount} onChange={(event) => updateSummary('packageCount', event.target.value)} /></label>
+                          <label><span>Суммарный вес, кг</span><input aria-label="Суммарный вес заказа" inputMode="decimal" value={orderSummary.totalWeightKg} onChange={(event) => updateSummary('totalWeightKg', event.target.value)} /></label>
                           <label className="wide order-notes-field"><span>Примечание к заказу</span><textarea aria-label="Примечание к заказу" placeholder="Например: позвонить перед отгрузкой или проверить замену" value={orderNotes} maxLength={2000} onChange={(event) => { setOrderNotes(event.target.value); setSaveState('idle') }} /></label>
-                          <label className="wide raw-customer"><span>Весь блок после לכבוד</span><textarea aria-label="Все данные заказчика" dir="rtl" value={customer.raw} onChange={(event) => updateCustomer('raw', event.target.value)} /></label>
                         </div>
                       </section>
 
@@ -455,7 +494,7 @@ function App() {
                           <thead><tr><th>#</th><th>Адрес</th><th>מק״ט</th><th>Штрихкод</th><th>Описание</th><th>В коробке</th><th>Коробок</th><th>Всего</th><th>Статус</th></tr></thead>
                           <tbody>
                             {items.map((item) => (
-                              <tr key={item.row} className={item.warnings.length ? 'needs-review' : ''}>
+                              <tr key={item.row} className={item.warnings.length || item.productVerification === 'unverified' ? 'needs-review' : ''}>
                                 <td>{item.row}</td>
                                 <td><input aria-label={`Адрес, строка ${item.row}`} value={item.address} onChange={(event) => updateItem(item.row, 'address', event.target.value.toUpperCase())} /></td>
                                 <td><input aria-label={`מק״ט, строка ${item.row}`} inputMode="numeric" value={item.sku} onChange={(event) => updateItem(item.row, 'sku', event.target.value)} /></td>
@@ -464,7 +503,10 @@ function App() {
                                 <td><input aria-label={`В коробке, строка ${item.row}`} inputMode="decimal" value={item.unitsPerBox} onChange={(event) => updateItem(item.row, 'unitsPerBox', event.target.value)} /></td>
                                 <td><input aria-label={`Коробок, строка ${item.row}`} inputMode="decimal" value={item.boxCount} onChange={(event) => updateItem(item.row, 'boxCount', event.target.value)} /></td>
                                 <td><input aria-label={`Количество, строка ${item.row}`} inputMode="decimal" value={item.quantity} onChange={(event) => updateItem(item.row, 'quantity', event.target.value)} /></td>
-                                <td>{item.warnings.length ? <span className="warning-pill" title={item.warnings.join(' · ')}>{item.warnings.length}</span> : <span className="valid-pill"><Check size={13} /></span>}</td>
+                                <td className="item-status-cell">
+                                  <span className={`verification-pill ${item.productVerification === 'verified' ? 'verified' : 'unverified'}`} title={item.catalogCorrectedFields?.length ? `Исправлено по БД: ${item.catalogCorrectedFields.join(', ')}` : ''}>{item.productVerification === 'verified' ? 'Проверен' : 'Не проверен'}</span>
+                                  {item.warnings.length ? <span className="warning-pill" title={item.warnings.join(' · ')}>{item.warnings.length}</span> : <span className="valid-pill"><Check size={13} /></span>}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -486,7 +528,7 @@ function App() {
                 <li><span>02</span><div><b>Добавьте света</b><p>Избегайте теней и бликов на бумаге.</p></div></li>
                 <li><span>03</span><div><b>Покажите весь лист</b><p>Все края должны попадать в кадр.</p></div></li>
               </ul>
-              <div className="privacy-note"><ShieldCheck size={18} /><p><b>Ваши данные защищены</b><br />{recognitionMode === 'openai' ? 'В OpenAI отправляется только выбранное изображение; база остаётся на устройстве.' : 'Изображение обрабатывается только на этом устройстве.'}</p></div>
+              <div className="privacy-note"><ShieldCheck size={18} /><p><b>Ваши данные защищены</b><br />{recognitionMode === 'openai' ? 'В OpenAI отправляются только выбранные фото; база товаров остаётся на устройстве.' : 'Изображения обрабатываются только на этом устройстве.'}</p></div>
             </aside>
           </div>
 

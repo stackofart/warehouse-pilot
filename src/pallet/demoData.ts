@@ -25,7 +25,7 @@ function demoItem(row: number, product: Product, count: number): SavedOrder['ite
 
 function demoOrder(id: string, orderNumber: string, items: Array<[Product, number]>): SavedOrder {
   return {
-    id, orderNumber, customer: { name: 'Демонстрационный заказ', address: '', city: '', phone: '', customerNumber: '', raw: '' },
+    id, orderNumber,
     items: items.map(([demoProduct, count], index) => demoItem(index + 1, demoProduct, count)), rawText: '', sourceFileName: '', createdAt: now, updatedAt: now,
   }
 }

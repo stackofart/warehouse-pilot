@@ -4,9 +4,11 @@ import {
   normalizeQuantity,
   normalizeSku,
   validateOrderItem,
+  emptyOrderSummary,
+  formatRecognizedOrderText,
   type OcrProgress,
   type OcrResult,
-  type RecognizedCustomer,
+  type RecognizedOrderSummary,
   type RecognizedOrderItem,
 } from './ocr'
 
@@ -25,7 +27,7 @@ type OpenAIOrderPayload = {
   rawText?: unknown
   confidence?: unknown
   orderNumber?: unknown
-  customer?: Partial<Record<keyof RecognizedCustomer, unknown>>
+  summary?: Partial<Record<keyof RecognizedOrderSummary, unknown>>
   items?: unknown
   model?: unknown
   error?: unknown
@@ -51,15 +53,9 @@ function confidence(value: unknown) {
   return Number.isFinite(parsed) ? Math.round(Math.max(0, Math.min(100, parsed))) : 0
 }
 
-function normalizeCustomer(value: OpenAIOrderPayload['customer']): RecognizedCustomer {
-  return {
-    name: text(value?.name),
-    address: text(value?.address),
-    city: text(value?.city),
-    phone: text(value?.phone).replace(/\D/g, ''),
-    customerNumber: text(value?.customerNumber).replace(/\D/g, ''),
-    raw: text(value?.raw),
-  }
+function normalizeSummary(value: OpenAIOrderPayload['summary']): RecognizedOrderSummary {
+  const empty = emptyOrderSummary()
+  return Object.fromEntries(Object.keys(empty).map((key) => [key, text(value?.[key as keyof RecognizedOrderSummary])])) as unknown as RecognizedOrderSummary
 }
 
 function normalizeItem(value: OpenAIItem, index: number): RecognizedOrderItem {
@@ -87,11 +83,13 @@ export function normalizeOpenAIOrder(payload: OpenAIOrderPayload): OcrResult {
     throw new OpenAIRecognitionError('На изображении не удалось найти строки заказа.', 'items_empty')
   }
 
+  const orderNumber = text(payload.orderNumber).toUpperCase().replace(/\s+/g, '')
+  const summary = normalizeSummary(payload.summary)
   return {
-    text: text(payload.rawText),
+    text: formatRecognizedOrderText(orderNumber, items, summary),
     confidence: confidence(payload.confidence),
-    orderNumber: text(payload.orderNumber).toUpperCase().replace(/\s+/g, ''),
-    customer: normalizeCustomer(payload.customer),
+    orderNumber,
+    summary,
     items,
     validRowCount: items.filter((item) => item.warnings.length === 0).length,
     tablePreviewUrl: '',
@@ -132,13 +130,16 @@ async function convertUnsupportedImage(image: File) {
 }
 
 export async function recognizeOrderImageWithOpenAI(
-  image: File,
+  images: File[],
   onProgress: (progress: OcrProgress) => void,
 ): Promise<OcrResult> {
+  if (!images.length || images.length > 2) {
+    throw new OpenAIRecognitionError('Выберите одно или два изображения заказа.', 'invalid_image_count')
+  }
   onProgress({ progress: .05, status: 'preparing AI image' })
-  const preparedImage = await convertUnsupportedImage(image)
+  const preparedImages = await Promise.all(images.map(convertUnsupportedImage))
   const formData = new FormData()
-  formData.append('image', preparedImage, preparedImage.name)
+  for (const preparedImage of preparedImages) formData.append('images', preparedImage, preparedImage.name)
 
   onProgress({ progress: .2, status: 'uploading image' })
   const responsePromise = fetch(`${import.meta.env.BASE_URL}api/recognize-order`, {

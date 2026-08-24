@@ -20,12 +20,13 @@ import {
   PackageX,
   Play,
   Route,
+  ShieldCheck,
   Timer,
   Undo2,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { listOrders, type SavedOrder } from '../orders/storage'
-import { listProducts, type Product } from '../products/storage'
+import { isProductVerified, listProducts, type Product } from '../products/storage'
 import type { RecognizedOrderItem } from '../recognition/ocr'
 import { optimizeOrderRoute } from '../routing/optimizer'
 import { buildWarehouseGraph } from '../warehouse/graph'
@@ -355,7 +356,7 @@ export function OrderWorkflow() {
       </nav>
 
       <section className="workflow-overview">
-        <div className="workflow-order-title"><span className={`workflow-status ${session?.status ?? 'not-started'}`}>{session?.status === 'completed' ? 'Завершён' : session ? 'В работе' : 'Не начат'}</span><h2>{order.orderNumber || 'Заказ без номера'}</h2><p dir="auto">{order.customer.name || 'Заказчик не указан'}</p></div>
+        <div className="workflow-order-title"><span className={`workflow-status ${session?.status ?? 'not-started'}`}>{session?.status === 'completed' ? 'Завершён' : session ? 'В работе' : 'Не начат'}</span><h2>{order.orderNumber || 'Заказ без номера'}</h2><p>{order.items.length} позиций в заказе</p></div>
         <div className="workflow-stat"><Clock3 size={17} /><span><small>Начало</small><strong>{formatTime(session?.startedAt)}</strong></span></div>
         <div className="workflow-stat"><Timer size={17} /><span><small>В работе</small><strong>{formatDuration(session?.startedAt, session?.completedAt, now)}</strong></span></div>
         <div className="workflow-stat"><Navigation size={17} /><span><small>Осталось пройти</small><strong>{route?.totalDistance === null ? 'частично' : `${route?.totalDistance.toFixed(1)} м`}</strong></span></div>
@@ -452,11 +453,13 @@ export function OrderWorkflow() {
                     const expanded = expandedRows.has(item.row)
                     const barcode = item.barcode || product?.barcode || '—'
                     const name = product?.name || item.description || `Позиция ${item.row}`
+                    const verification = item.productVerification ?? (product && isProductVerified(product) ? 'verified' : 'unverified')
                     const canHandle = Boolean(session) && session!.status === 'in-progress' && stopStatus === 'collecting'
                     return (
                       <div className={`workflow-pick-item ${status}`} key={item.row}>
                         <div className="workflow-item-copy">
                           <b dir="auto">{name}</b>
+                          <span className={`verification-pill ${verification}`}>{verification === 'verified' ? <ShieldCheck size={12} /> : <AlertTriangle size={12} />}{verification === 'verified' ? 'Проверен' : 'Не проверен'}</span>
                           <span><Barcode size={13} /><span className="workflow-item-barcode">{barcode}</span> · <strong>{item.boxCount || '?'} кор.</strong> · {item.quantity || '?'} шт.</span>
                           <button type="button" className="workflow-item-details-toggle" aria-expanded={expanded} onClick={() => toggleRowDetails(item.row)}><Info size={13} />{expanded ? 'Скрыть подробности' : 'Подробнее о товаре'}{expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</button>
                           {expanded && (

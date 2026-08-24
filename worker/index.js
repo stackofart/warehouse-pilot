@@ -1,16 +1,13 @@
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const DEFAULT_MODEL = 'gpt-5.6-luna'
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+const MAX_IMAGES = 2
 
 const orderSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['rawText', 'confidence', 'orderNumber', 'customer', 'items'],
+  required: ['confidence', 'orderNumber', 'summary', 'items'],
   properties: {
-    rawText: {
-      type: 'string',
-      description: 'Best-effort transcription of the visible order data, preserving Hebrew text.',
-    },
     confidence: {
       type: 'number',
       minimum: 0,
@@ -21,17 +18,15 @@ const orderSchema = {
       type: 'string',
       description: 'Order confirmation number, usually beginning with SO. Empty when not visible.',
     },
-    customer: {
+    summary: {
       type: 'object',
       additionalProperties: false,
-      required: ['name', 'address', 'city', 'phone', 'customerNumber', 'raw'],
+      required: ['itemCount', 'totalQuantity', 'packageCount', 'totalWeightKg'],
       properties: {
-        name: { type: 'string' },
-        address: { type: 'string' },
-        city: { type: 'string' },
-        phone: { type: 'string' },
-        customerNumber: { type: 'string' },
-        raw: { type: 'string', description: 'All visible customer lines after לכבוד, preserving line breaks.' },
+        itemCount: { type: 'string', description: 'Printed total number of product lines (מס פריטים).' },
+        totalQuantity: { type: 'string', description: 'Printed overall quantity (סה״כ כמות).' },
+        packageCount: { type: 'string', description: 'Printed total package/carton count (מס אריזות).' },
+        totalWeightKg: { type: 'string', description: 'Printed order weight in kilograms (משקל).' },
       },
     },
     items: {
@@ -73,8 +68,13 @@ Important table rules:
 
 Header rules:
 - orderNumber is the full order confirmation number, commonly formatted like SO26017094.
-- customer contains the data printed after לכבוד. Put every visible line from that customer block in customer.raw.
-- Do not include supplier/company header details in the customer fields.`
+- Do not extract or return customer identity, address, phone, or customer number.
+
+Footer rules:
+- summary contains only totals explicitly printed on the document: number of product lines, overall quantity, packages and weight in kilograms.
+- Do not calculate or infer a summary value from the item rows. Return an empty string when it is not printed or not readable.
+
+When two photographs are provided, they are consecutive photographs/pages of the same order. Process them in the submitted order, include product rows from both, and do not duplicate a row that is visibly repeated in an overlapping area.`
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -120,20 +120,27 @@ async function recognizeOrder(request, env) {
     return jsonResponse({ error: 'Не удалось прочитать загруженное изображение.', code: 'invalid_form_data' }, 400)
   }
 
-  const image = formData.get('image')
-  if (!(image instanceof File)) {
-    return jsonResponse({ error: 'Добавьте изображение в поле image.', code: 'image_missing' }, 400)
+  const currentImages = formData.getAll('images')
+  const legacyImage = formData.get('image')
+  const images = currentImages.length ? currentImages : legacyImage ? [legacyImage] : []
+  if (!images.length || images.some((image) => !(image instanceof File))) {
+    return jsonResponse({ error: 'Добавьте одно или два изображения в поле images.', code: 'image_missing' }, 400)
   }
-  if (!image.type.startsWith('image/')) {
+  if (images.length > MAX_IMAGES) {
+    return jsonResponse({ error: 'Можно отправить не более двух изображений заказа.', code: 'too_many_images' }, 400)
+  }
+  if (images.some((image) => !image.type.startsWith('image/'))) {
     return jsonResponse({ error: 'Загруженный файл не является изображением.', code: 'invalid_image_type' }, 415)
   }
-  if (image.size > MAX_IMAGE_BYTES) {
-    return jsonResponse({ error: 'Размер изображения превышает 20 МБ.', code: 'image_too_large' }, 413)
+  if (images.some((image) => image.size > MAX_IMAGE_BYTES)) {
+    return jsonResponse({ error: 'Размер одного из изображений превышает 20 МБ.', code: 'image_too_large' }, 413)
   }
 
   const model = env.OPENAI_VISION_MODEL || DEFAULT_MODEL
-  const imageBytes = new Uint8Array(await image.arrayBuffer())
-  const imageUrl = `data:${image.type};base64,${bytesToBase64(imageBytes)}`
+  const imageUrls = await Promise.all(images.map(async (image) => {
+    const imageBytes = new Uint8Array(await image.arrayBuffer())
+    return `data:${image.type};base64,${bytesToBase64(imageBytes)}`
+  }))
 
   let openAIResponse
   try {
@@ -151,8 +158,8 @@ async function recognizeOrder(request, env) {
         input: [{
           role: 'user',
           content: [
-            { type: 'input_text', text: 'Extract the warehouse order from this photograph into the required schema.' },
-            { type: 'input_image', image_url: imageUrl, detail: 'high' },
+            { type: 'input_text', text: `Extract this warehouse order from ${images.length} submitted photograph(s) into the required schema. The database is not included; transcribe only the document.` },
+            ...imageUrls.map((imageUrl) => ({ type: 'input_image', image_url: imageUrl, detail: 'high' })),
           ],
         }],
         text: {

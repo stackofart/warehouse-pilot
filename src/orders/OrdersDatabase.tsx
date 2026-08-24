@@ -1,9 +1,9 @@
-import { Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Play } from 'lucide-react'
+import { AlertTriangle, Boxes, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, FileJson, FileText, FileUp, MapPin, PackagePlus, Play, ShieldCheck } from 'lucide-react'
 import { type ChangeEvent, useEffect, useState } from 'react'
 import { listFulfillmentSessions } from '../fulfillment/storage'
 import { getFulfillmentProgress, type FulfillmentSession } from '../fulfillment/workflow'
 import { listOrders, type SavedOrder } from './storage'
-import { importOrderDocument, orderImportExample, orderImportInstructions, OrderImportValidationError, orderJsonSchema, parseOrderDocument } from './transfer'
+import { createOrdersDatabaseExport, importOrderDocument, orderImportExample, orderImportInstructions, OrderImportValidationError, orderJsonSchema, parseOrderDocument } from './transfer'
 
 function orderQuantity(order: SavedOrder) {
   return order.items.reduce((total, item) => total + (Number(item.quantity) || 0), 0)
@@ -78,7 +78,7 @@ export function OrdersDatabase() {
       const result = await importOrderDocument(document, file.name, orders)
       await refreshData()
       setExpandedId(result.savedOrder.id)
-      setMessage(`Заказ ${result.savedOrder.orderNumber} импортирован: ${result.savedOrder.items.length} позиций. Товаров добавлено или дополнено: ${result.products.saved}; пропущено: ${result.products.skipped}; конфликтов: ${result.products.conflicts}.`)
+      setMessage(`Заказ ${result.savedOrder.orderNumber} импортирован: ${result.savedOrder.items.length} позиций. Новых товаров: ${result.products.saved}; уже в базе: ${result.products.matchedExisting}; неполных: ${result.products.incomplete}; конфликтов: ${result.products.conflicts}.`)
     } catch (reason) {
       console.error(reason)
       if (reason instanceof OrderImportValidationError) setImportIssues(reason.issues)
@@ -101,6 +101,7 @@ export function OrdersDatabase() {
           <button className="secondary-button" type="button" onClick={() => downloadFile('warehouse-pilot-order-import.md', orderImportInstructions, 'text/markdown;charset=utf-8')}><FileText size={15} />Инструкция</button>
           <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-order.schema.json', orderJsonSchema)}><FileJson size={15} />JSON Schema</button>
           <button className="secondary-button" type="button" onClick={() => downloadJson('warehouse-pilot-order.example.json', orderImportExample)}><Download size={15} />Пример</button>
+          <button className="secondary-button" type="button" disabled={!orders.length} onClick={() => downloadJson('warehouse-pilot-orders-backup.json', createOrdersDatabaseExport(orders))}><Download size={15} />Экспорт всех заказов</button>
           <a className="primary-button new-order-link" href="#new-order"><PackagePlus size={17} />Новый заказ</a>
         </div>
       </div>
@@ -130,9 +131,9 @@ export function OrdersDatabase() {
                 <article className={`order-card ${expanded ? 'expanded' : ''}`} key={order.id}>
                   <button className="order-card-summary" type="button" aria-expanded={expanded} onClick={() => setExpandedId(expanded ? '' : order.id)}>
                     <span className="order-number"><ClipboardList size={18} /><span><small>Номер заказа</small><strong>{order.orderNumber || 'Без номера'}</strong></span></span>
-                    <span><small>Заказчик</small><b dir="auto">{order.customer.name || 'Не указан'}</b></span>
+                    <span><small>Вес заказа</small><b>{order.summary?.totalWeightKg ? `${order.summary.totalWeightKg} кг` : '—'}</b></span>
                     <span><small>Позиций</small><b>{order.items.length}</b></span>
-                    <span><small>Общее количество</small><b>{orderQuantity(order)}</b></span>
+                    <span><small>Общее количество</small><b>{order.summary?.totalQuantity || orderQuantity(order)}</b></span>
                     <span><small>Адресов</small><b>{orderLocations(order)}</b></span>
                     <span><small>Сохранён</small><b>{formatDate(order.updatedAt)}</b></span>
                     <i>{expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</i>
@@ -149,15 +150,15 @@ export function OrdersDatabase() {
 
                   {expanded && (
                     <div className="order-details">
-                      <div className="order-customer-line">
-                        <span><b>Клиент:</b> {order.customer.customerNumber || '—'}</span>
-                        <span><b>Адрес заказчика:</b> <span dir="auto">{[order.customer.city, order.customer.address].filter(Boolean).join(', ') || '—'}</span></span>
-                        <span><b>Телефон:</b> {order.customer.phone || '—'}</span>
+                      <div className="order-summary-line">
+                        <span><b>Позиций по документу:</b> {order.summary?.itemCount || '—'}</span>
+                        <span><b>Упаковок:</b> {order.summary?.packageCount || '—'}</span>
+                        <span><b>Суммарный вес:</b> {order.summary?.totalWeightKg ? `${order.summary.totalWeightKg} кг` : '—'}</span>
                       </div>
                       {order.notes && <div className="order-notes"><b>Примечание</b><p>{order.notes}</p></div>}
                       <div className="order-items-wrap">
                         <table className="order-items-table">
-                          <thead><tr><th>#</th><th>Адрес</th><th>מק״ט</th><th>Штрихкод</th><th>Название</th><th>В коробке</th><th>Коробок</th><th>Всего</th></tr></thead>
+                          <thead><tr><th>#</th><th>Адрес</th><th>מק״ט</th><th>Штрихкод</th><th>Название</th><th>В коробке</th><th>Коробок</th><th>Всего</th><th>Проверка</th></tr></thead>
                           <tbody>
                             {order.items.map((item) => (
                               <tr key={`${order.id}-${item.row}`}>
@@ -168,13 +169,14 @@ export function OrdersDatabase() {
                                 <td dir="auto">{item.description || '—'}</td>
                                 <td>{item.unitsPerBox || '—'}</td>
                                 <td>{item.boxCount || '—'}</td>
-                                <td>{item.quantity || '—'}</td>
+                                 <td>{item.quantity || '—'}</td>
+                                 <td><span className={`verification-pill ${item.productVerification === 'unverified' ? 'unverified' : 'verified'}`}>{item.productVerification === 'unverified' ? <AlertTriangle size={12} /> : <ShieldCheck size={12} />}{item.productVerification === 'unverified' ? 'Не проверен' : 'Проверен'}</span></td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                      <p className="order-detail-note"><Boxes size={14} />Товары с заполненными מק״ט, штрихкодом, названием и адресом автоматически попадают в справочник «Товары» при сохранении заказа.</p>
+                      <p className="order-detail-note"><Boxes size={14} />Новые товары из распознавания попадают в справочник как непроверенные. Подтвердить их можно в разделе «Товары».</p>
                     </div>
                   )}
                 </article>

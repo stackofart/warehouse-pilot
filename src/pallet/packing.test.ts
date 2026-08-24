@@ -5,7 +5,7 @@ import { optimizePallet } from './packing'
 import { demoOrders, demoProducts } from './demoData'
 
 function order(items: SavedOrder['items']): SavedOrder {
-  return { id: 'order', orderNumber: 'SO1', customer: { name: '', address: '', city: '', phone: '', customerNumber: '', raw: '' }, items, rawText: '', sourceFileName: '', createdAt: '', updatedAt: '' }
+  return { id: 'order', orderNumber: 'SO1', items, rawText: '', sourceFileName: '', createdAt: '', updatedAt: '' }
 }
 
 function item(row: number, sku: string, boxes = '1'): SavedOrder['items'][number] {
