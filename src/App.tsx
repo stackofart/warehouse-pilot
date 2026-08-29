@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Route,
   Save,
+  ScanBarcode,
   ScanLine,
   Settings,
   ShieldCheck,
@@ -38,14 +39,16 @@ import { reconcileRecognizedItems } from './products/reconciliation'
 import { OrderWorkflow } from './fulfillment/OrderWorkflow'
 import { WarehouseMap } from './warehouse/WarehouseMap'
 import { OverviewDashboard } from './overview/OverviewDashboard'
+import { BarcodeScanner } from './scanner/BarcodeScanner'
 import './App.css'
 
 type OcrState = 'idle' | 'ready' | 'working' | 'success' | 'error'
 type RecognitionMode = 'openai' | 'local'
-type AppSection = 'overview' | 'new-order' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'pallet'
+type AppSection = 'overview' | 'new-order' | 'scanner' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'pallet'
 
 function sectionFromHash(): AppSection {
   if (window.location.hash === '#overview') return 'overview'
+  if (window.location.hash === '#scanner') return 'scanner'
   if (window.location.hash === '#products') return 'products'
   if (window.location.hash === '#orders') return 'orders'
   if (window.location.hash === '#warehouse') return 'warehouse'
@@ -319,6 +322,7 @@ function App() {
         <nav className="main-nav" aria-label="Основная навигация">
           <a className={activeSection === 'overview' ? 'active' : ''} href="#overview"><LayoutDashboard size={19} />Обзор</a>
           <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={19} />Новый заказ</a>
+          <a className={activeSection === 'scanner' ? 'active' : ''} href="#scanner"><ScanBarcode size={19} />Сканер</a>
           <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><ClipboardList size={19} />Заказы{orderCount > 0 && <span className="nav-count">{orderCount}</span>}</a>
           <a className={activeSection === 'warehouse' ? 'active' : ''} href="#warehouse"><Map size={19} />Карта склада</a>
           <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={19} />Паллета</a>
@@ -346,7 +350,7 @@ function App() {
           <div className="shift-status"><span /> Смена активна <b>08:42</b></div>
         </header>
 
-        {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'products' ? <ProductDatabase /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
+        {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'scanner' ? <BarcodeScanner /> : activeSection === 'products' ? <ProductDatabase /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">НОВЫЙ ЗАКАЗ</p>
@@ -544,6 +548,7 @@ function App() {
       <nav className="mobile-bottom-nav" aria-label="Мобильная навигация">
         <a className={activeSection === 'overview' ? 'active' : ''} href="#overview"><LayoutDashboard size={21} /><span>Обзор</span></a>
         <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={21} /><span>Новый</span></a>
+        <a className={`scanner-nav-link ${activeSection === 'scanner' ? 'active' : ''}`} href="#scanner"><ScanBarcode size={21} /><span>Сканер</span></a>
         <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><span className="mobile-nav-icon"><ClipboardList size={21} />{orderCount > 0 && <i>{orderCount}</i>}</span><span>Заказы</span></a>
         <a className={activeSection === 'warehouse' ? 'active' : ''} href="#warehouse"><Map size={21} /><span>Карта</span></a>
         <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={21} /><span>Паллета</span></a>

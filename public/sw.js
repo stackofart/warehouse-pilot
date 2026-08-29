@@ -1,4 +1,4 @@
-const CACHE_NAME = 'warehouse-pilot-v1'
+const CACHE_NAME = 'warehouse-pilot-v2'
 const APP_SHELL = [
   './',
   './index.html',
