@@ -60,10 +60,11 @@ function knownProductPayload(product?: Product) {
   }
 }
 
-function looksLikeResearchResult(value: unknown): value is ProductResearchResult {
+export function isCorrectionResearchResult(value: unknown): value is ProductResearchResult {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<ProductResearchResult>
-  return typeof candidate.barcode === 'string'
+  return candidate.auditMode === 'corrections'
+    && typeof candidate.barcode === 'string'
     && typeof candidate.identityConfidence === 'number'
     && Boolean(candidate.name && candidate.unit && candidate.casePack)
     && Array.isArray(candidate.sources)
@@ -101,7 +102,7 @@ export async function researchProductOnline(barcodeValue: string, product?: Prod
     }
     throw new ProductResearchError(payload?.error || 'Сервис поиска вернул ошибку.', payload?.code || 'research_error')
   }
-  if (!looksLikeResearchResult(payload)) {
+  if (!isCorrectionResearchResult(payload)) {
     throw new ProductResearchError('Получен неполный результат поиска.', 'invalid_research_response')
   }
   saveCachedProductResearch(payload)
@@ -113,7 +114,7 @@ export function getCachedProductResearch(barcodeValue: string) {
   const barcode = normalizeBarcode(barcodeValue)
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(`${RESEARCH_CACHE_PREFIX}${barcode}`) ?? 'null')
-    if (!looksLikeResearchResult(parsed)) return null
+    if (!isCorrectionResearchResult(parsed)) return null
     if (Date.now() - Date.parse(parsed.researchedAt) > RESEARCH_CACHE_MAX_AGE_MS) return null
     return parsed
   } catch {

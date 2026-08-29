@@ -1,10 +1,11 @@
-import { AlertTriangle, Check, ExternalLink, Globe2, LoaderCircle, Search, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, Check, Globe2, LoaderCircle, Search, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   applyResearchSelection,
   buildResearchComparison,
   defaultResearchSelection,
   getCachedProductResearch,
+  isCorrectionResearchResult,
   ProductResearchError,
   researchProductOnline,
   type ResearchFieldKey,
@@ -19,11 +20,10 @@ type ProductResearchModalProps = {
   onProductSaved: (product: Product) => void
 }
 
-const confidenceLabels = { high: 'Высокая', medium: 'Средняя', low: 'Низкая' } as const
 const identityLabels = { exact: 'Точное совпадение', probable: 'Вероятное совпадение', ambiguous: 'Неоднозначно', not_found: 'Товар не найден' } as const
 
 export function ProductResearchModal({ barcode, product, onClose, onProductSaved }: ProductResearchModalProps) {
-  const [result, setResult] = useState<ProductResearchResult | null>(() => product?.research?.result ?? getCachedProductResearch(barcode))
+  const [result, setResult] = useState<ProductResearchResult | null>(() => isCorrectionResearchResult(product?.research?.result) ? product.research.result : getCachedProductResearch(barcode))
   const [selected, setSelected] = useState<Set<ResearchFieldKey>>(new Set())
   const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -32,9 +32,10 @@ export function ProductResearchModal({ barcode, product, onClose, onProductSaved
   const [location, setLocation] = useState(product?.location ?? '')
 
   const fields = useMemo(() => result ? buildResearchComparison(product, result) : [], [product, result])
+  const proposedFields = useMemo(() => fields.filter((field) => field.hasProposal), [fields])
 
   useEffect(() => {
-    const restored = product?.research?.result ?? getCachedProductResearch(barcode)
+    const restored = isCorrectionResearchResult(product?.research?.result) ? product.research.result : getCachedProductResearch(barcode)
     setResult(restored)
     setSku(product?.sku ?? '')
     setLocation(product?.location ?? '')
@@ -155,7 +156,9 @@ export function ProductResearchModal({ barcode, product, onClose, onProductSaved
           <div className="product-research-start">
             <Search size={38} />
             <h3>{product ? `Сверить «${product.name}»` : 'Найти товар по штрихкоду'}</h3>
-            <p>OpenAI выполнит веб-поиск только для этого штрихкода. Остальные товары базы не затрагиваются.</p>
+            <p>{product
+              ? 'OpenAI получит штрихкод и текущие сведения этой карточки, сверит их с интернетом и предложит только дополнения или исправления.'
+              : 'OpenAI выполнит поиск по этому штрихкоду и предложит данные для новой карточки. Остальные товары базы не затрагиваются.'}</p>
             <button className="primary-button" type="button" disabled={busy} onClick={() => void runResearch()}>
               {busy ? <LoaderCircle className="spin" size={18} /> : <Globe2 size={18} />}{busy ? 'Идёт поиск…' : 'Найти данные в интернете'}
             </button>
@@ -167,25 +170,19 @@ export function ProductResearchModal({ barcode, product, onClose, onProductSaved
               <button className="secondary-button" type="button" disabled={busy} onClick={() => void runResearch()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Globe2 size={16} />}{busy ? 'Обновляю…' : 'Проверить заново'}</button>
             </div>
 
-            {(result.conflicts.length > 0 || result.warnings.length > 0) && <div className="product-research-alerts">
-              {result.conflicts.map((message, index) => <p className="conflict" key={`conflict-${index}`}><AlertTriangle size={15} />{message}</p>)}
-              {result.warnings.map((message, index) => <p key={`warning-${index}`}><AlertTriangle size={15} />{message}</p>)}
-            </div>}
-
-            <div className="product-research-table-wrap">
+            {proposedFields.length > 0 ? <div className="product-research-table-wrap">
               <table className="product-research-table">
-                <thead><tr><th>Применить</th><th>Поле</th><th>Сейчас в БД</th><th>Найдено</th><th>Надёжность</th></tr></thead>
-                <tbody>{fields.map((field) => (
-                  <tr className={`${field.hasProposal ? '' : 'not-found'} ${isDifference(field.currentValue, field.proposedValue) ? 'different' : ''}`} key={field.key}>
-                    <td><input type="checkbox" aria-label={`Применить поле ${field.label}`} disabled={!field.hasProposal} checked={selected.has(field.key)} onChange={() => toggleField(field.key)} /></td>
+                <thead><tr><th>Применить</th><th>Поле</th><th>Сейчас в БД</th><th>Предлагаемое исправление</th></tr></thead>
+                <tbody>{proposedFields.map((field) => (
+                  <tr className={isDifference(field.currentValue, field.proposedValue) ? 'different' : ''} key={field.key}>
+                    <td><input type="checkbox" aria-label={`Применить поле ${field.label}`} checked={selected.has(field.key)} onChange={() => toggleField(field.key)} /></td>
                     <th>{field.label}</th>
                     <td dir="auto">{field.currentValue}</td>
-                    <td dir="auto"><b>{field.hasProposal ? field.proposedValue : 'Не найдено'}</b>{field.note && <small>{field.note}</small>}{field.sourceUrls.length > 0 && <span className="product-research-field-sources">{field.sourceUrls.map((url, index) => <a href={url} target="_blank" rel="noreferrer" key={url}>Источник {index + 1}<ExternalLink size={11} /></a>)}</span>}</td>
-                    <td><span className={`research-confidence ${field.confidence}`}>{confidenceLabels[field.confidence]}</span>{field.valueType !== 'published' && field.valueType !== 'not_found' && <small>{field.valueType === 'estimated' ? 'Оценка' : 'Расчёт'}</small>}</td>
+                    <td dir="auto"><b>{field.proposedValue}</b></td>
                   </tr>
                 ))}</tbody>
               </table>
-            </div>
+            </div> : <div className="product-research-no-changes"><Check size={20} /><div><b>Исправления не найдены</b><span>Текущая карточка не требует подтверждённых изменений.</span></div></div>}
 
             {!product && <div className="product-research-new-fields">
               <p><b>Новый товар</b><span>Интернет не знает внутренний адрес склада и מק״ט.</span></p>
@@ -193,11 +190,6 @@ export function ProductResearchModal({ barcode, product, onClose, onProductSaved
               <label><span>Адрес хранения</span><input value={location} onChange={(event) => setLocation(event.target.value.toUpperCase())} placeholder="23.F" /></label>
             </div>}
 
-            <section className="product-research-sources">
-              <h3>Использованные источники · {result.sources.length}</h3>
-              {result.sources.length ? <ol>{result.sources.map((source) => <li key={source.url}><a href={source.url} target="_blank" rel="noreferrer"><span>{source.title}</span><ExternalLink size={14} /></a></li>)}</ol> : <p>Список подтверждённых источников не получен. Не принимайте неподтверждённые значения.</p>}
-              <small>Модель: {result.model} · {new Date(result.researchedAt).toLocaleString('ru-RU')}</small>
-            </section>
           </>
         )}
 

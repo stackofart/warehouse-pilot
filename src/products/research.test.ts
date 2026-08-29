@@ -8,6 +8,7 @@ const value = <T>(current: T | null, confidence: 'low' | 'medium' | 'high' = 'hi
 })
 
 const result = (): ProductResearchResult => ({
+  auditMode: 'corrections',
   barcode: '7290121920285', identityMatch: 'exact', identityConfidence: 96,
   name: value('Milka milk 90 g'), brand: value('Milka'), description: value('Milk chocolate'), netContent: value('90 g'),
   unit: { lengthCm: value(16), widthCm: value(8), heightCm: value(1), grossWeightKg: value(.096) },

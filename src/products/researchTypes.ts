@@ -1,5 +1,5 @@
 export type ResearchConfidence = 'low' | 'medium' | 'high'
-export type ResearchValueType = 'published' | 'estimated' | 'calculated' | 'not_found'
+export type ResearchValueType = 'published' | 'estimated' | 'calculated' | 'unchanged' | 'not_found'
 
 export type ResearchValue<T> = {
   value: T | null
@@ -15,6 +15,7 @@ export type ProductResearchSource = {
 }
 
 export type ProductResearchResult = {
+  auditMode: 'corrections'
   barcode: string
   identityMatch: 'exact' | 'probable' | 'ambiguous' | 'not_found'
   identityConfidence: number

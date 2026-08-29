@@ -115,6 +115,10 @@ describe('OpenAI product research Worker', () => {
       expect(requestBody.tools).toEqual([{ type: 'web_search', search_context_size: 'medium', external_web_access: true }])
       expect(requestBody.include).toContain('web_search_call.action.sources')
       expect(requestBody.text.format).toMatchObject({ type: 'json_schema', strict: true })
+      expect(requestBody.instructions).toContain('propose only useful changes')
+      expect(requestBody.input).toContain('"name":"Milka"')
+      expect(requestBody.input).toContain('"unitsPerBox":24')
+      expect(requestBody.input).toContain('"lengthCm":16')
 
       const output = structuredClone(researchedProduct)
       output.unit.lengthCm.sourceUrls.push('https://invented.example/not-consulted')
@@ -130,13 +134,26 @@ describe('OpenAI product research Worker', () => {
     const request = new Request('https://warehouse.example/api/research-product', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ barcode: '7290121920285', knownProduct: { name: 'Milka' } }),
+      body: JSON.stringify({
+        barcode: '7290121920285',
+        knownProduct: {
+          name: 'Milka',
+          brand: 'Milka',
+          description: 'Milk chocolate',
+          netContent: '90 g',
+          unitsPerBox: 24,
+          caseBarcode: '17290121920282',
+          itemSpec: { lengthCm: 16, widthCm: 8, heightCm: 1, weightKg: .096 },
+          boxSpec: { lengthCm: 39, widthCm: 19, heightCm: 14, weightKg: 2.7 },
+        },
+      }),
     })
 
     const response = await worker.fetch(request, { OPENAI_API_KEY: 'test-key', ASSETS: { fetch: vi.fn() } })
     const body = await response.json()
 
     expect(response.status).toBe(200)
+    expect(body.auditMode).toBe('corrections')
     expect(body.barcode).toBe('7290121920285')
     expect(body.unit.lengthCm.sourceUrls).toEqual(['https://manufacturer.example/product'])
     expect(body.sources).toEqual([{ url: 'https://manufacturer.example/product', title: 'Manufacturer product' }])
