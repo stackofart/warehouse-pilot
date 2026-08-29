@@ -9,6 +9,8 @@ npm ci
 npm run dev
 ```
 
+`npm run dev` поднимает одновременно Vite и локальный Cloudflare Worker, поэтому маршруты `/api/*` работают без отдельного процесса Wrangler. Для функций OpenAI сначала скопируйте `.dev.vars.example` в `.dev.vars` и замените тестовое значение `OPENAI_API_KEY` своим ключом. Файл `.dev.vars` исключён из Git.
+
 Проверка перед публикацией:
 
 ```bash
@@ -55,6 +57,7 @@ OCR-модели и OpenCV достаточно большие, поэтому �
 
 - секрет `OPENAI_API_KEY` — API-ключ проекта OpenAI;
 - необязательную обычную переменную `OPENAI_VISION_MODEL` — модель распознавания, по умолчанию `gpt-5.6-luna`.
+- необязательную обычную переменную `OPENAI_PRODUCT_MODEL` — модель интернет-сверки товара, по умолчанию `gpt-5.6-terra`.
 
 То же самое можно сделать через Wrangler:
 
@@ -62,11 +65,10 @@ OCR-модели и OpenCV достаточно большие, поэтому �
 npx wrangler secret put OPENAI_API_KEY
 ```
 
-Для локального запуска Worker скопируйте `.dev.vars.example` в `.dev.vars`, укажите тестовый ключ и выполните:
+Для локальной разработки скопируйте `.dev.vars.example` в `.dev.vars`, укажите тестовый ключ и выполните:
 
 ```bash
-npm run build
-npx wrangler dev
+npm run dev
 ```
 
 Файл `.dev.vars` исключён из Git. Не добавляйте ключ в `VITE_*`, исходный код или GitHub Actions build variables: такие значения становятся доступны клиентскому JavaScript.

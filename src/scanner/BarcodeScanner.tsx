@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Flashlight,
   FlashlightOff,
+  Globe2,
   History,
   ImageUp,
   Keyboard,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react'
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { isProductVerified, listProducts, type Product } from '../products/storage'
+import { ProductResearchModal } from '../products/ProductResearchModal'
 import { decodeBarcodes, prepareBarcodeEngine, type DecodedBarcode } from './barcodeEngine'
 import { advanceBarcodeConsensus, findProductByBarcode, normalizeBarcode, type BarcodeConsensus } from './barcodeUtils'
 
@@ -72,6 +74,7 @@ export function BarcodeScanner() {
   const [torchAvailable, setTorchAvailable] = useState(false)
   const [torchEnabled, setTorchEnabled] = useState(false)
   const [stillImageBusy, setStillImageBusy] = useState(false)
+  const [researchTarget, setResearchTarget] = useState<{ barcode: string; product?: Product } | null>(null)
 
   useEffect(() => {
     let active = true
@@ -280,6 +283,14 @@ export function BarcodeScanner() {
     setManualCode('')
   }
 
+  const handleResearchedProduct = (product: Product) => {
+    productsRef.current = [product, ...productsRef.current.filter((item) => item.id !== product.id)]
+    setProducts(productsRef.current)
+    setResult((current) => current?.barcode === product.barcode ? { ...current, product } : current)
+    setHistory((current) => current.map((entry) => entry.barcode === product.barcode ? { ...entry, product } : entry))
+    setResearchTarget({ barcode: product.barcode, product })
+  }
+
   return (
     <div className="page scanner-page">
       <div className="page-heading scanner-heading">
@@ -344,19 +355,22 @@ export function BarcodeScanner() {
               <>
                 <header><div><small>Считан {formatScanTime(result.scannedAt)}</small><strong>{result.barcode}</strong><span>{result.format}</span></div><CheckCircle2 size={28} /></header>
                 {result.product ? (
-                  <div className="scanner-product-match">
-                    <div className="scanner-product-image">
-                      {result.product.imageDataUrl ? <img src={result.product.imageDataUrl} alt={result.product.name} /> : <Package size={34} />}
+                  <div className="scanner-product-found">
+                    <div className="scanner-product-match">
+                      <div className="scanner-product-image">
+                        {result.product.imageDataUrl ? <img src={result.product.imageDataUrl} alt={result.product.name} /> : <Package size={34} />}
+                      </div>
+                      <div className="scanner-product-copy">
+                        <span className={`verification-badge ${isProductVerified(result.product) ? 'verified' : 'unverified'}`}>{isProductVerified(result.product) ? 'Проверен' : 'Не проверен'}</span>
+                        <h2 dir="auto">{result.product.name}</h2>
+                        <p><MapPin size={18} /><span>Адрес хранения <b>{result.product.location}</b></span></p>
+                        <dl><div><dt>מק״ט</dt><dd>{result.product.sku || '—'}</dd></div><div><dt>В коробке</dt><dd>{result.product.unitsPerBox || '—'}</dd></div></dl>
+                      </div>
                     </div>
-                    <div className="scanner-product-copy">
-                      <span className={`verification-badge ${isProductVerified(result.product) ? 'verified' : 'unverified'}`}>{isProductVerified(result.product) ? 'Проверен' : 'Не проверен'}</span>
-                      <h2 dir="auto">{result.product.name}</h2>
-                      <p><MapPin size={18} /><span>Адрес хранения <b>{result.product.location}</b></span></p>
-                      <dl><div><dt>מק״ט</dt><dd>{result.product.sku || '—'}</dd></div><div><dt>В коробке</dt><dd>{result.product.unitsPerBox || '—'}</dd></div></dl>
-                    </div>
+                    <button className="scanner-research-button" type="button" onClick={() => setResearchTarget({ barcode: result.barcode, product: result.product })}><Globe2 size={17} />{result.product.research?.status === 'needs_review' ? 'Открыть найденные данные' : 'Сверить этот товар в интернете'}</button>
                   </div>
                 ) : (
-                  <div className="scanner-product-missing"><TriangleAlert size={23} /><div><b>Товар не найден в базе</b><p>Код считан, но совпадения нет. Проверьте цифры или добавьте товар вручную.</p><a href="#products">Открыть базу товаров</a></div></div>
+                  <div className="scanner-product-missing"><TriangleAlert size={23} /><div><b>Товар не найден в базе</b><p>Код считан, но совпадения нет. Можно найти публичные данные по этому штрихкоду и затем указать מק״ט и адрес склада.</p><div><button type="button" onClick={() => setResearchTarget({ barcode: result.barcode })}><Globe2 size={16} />Найти в интернете</button><a href="#products">Добавить вручную</a></div></div></div>
                 )}
               </>
             )}
@@ -370,6 +384,7 @@ export function BarcodeScanner() {
           </section>
         </aside>
       </div>
+      {researchTarget && <ProductResearchModal barcode={researchTarget.barcode} product={researchTarget.product} onClose={() => setResearchTarget(null)} onProductSaved={handleResearchedProduct} />}
     </div>
   )
 }

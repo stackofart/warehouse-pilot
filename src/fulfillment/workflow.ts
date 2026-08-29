@@ -52,7 +52,7 @@ export type FulfillmentSession = {
   updatedAt: string
   /** Address/node selected before work starts. Empty string means the central entrance. */
   startAddress: string
-  /** Last stop at which the worker confirmed arrival. */
+  /** Last stop inferred from an item action or selected manually. */
   currentAddress: string
   /** Fixed loading gate visited after all picking stops. */
   finishAddress: string
@@ -242,6 +242,44 @@ export function arriveAndStartFulfillmentStop(
 ) {
   const arrived = updateFulfillmentStop(session, rawAddress, 'arrived', now, transition)
   return updateFulfillmentStop(arrived, rawAddress, 'collecting', now)
+}
+
+/**
+ * Records the only action the picker has to make at a stop: the outcome for an
+ * item. The first outcome starts the stop and the last handled item completes
+ * it, while preserving the detailed events used by analytics.
+ */
+export function updateFulfillmentItemAtStop(
+  session: FulfillmentSession,
+  rawAddress: string,
+  stopRows: number[],
+  row: number,
+  status: FulfillmentItemStatus,
+  now = new Date().toISOString(),
+  transition: FulfillmentStopTransition = {},
+) {
+  if (!stopRows.includes(row)) throw new Error(`Строка ${row} не относится к этой остановке`)
+  assertSessionIsActive(session)
+  const address = normalizeAddress(rawAddress)
+  const stop = session.stops[address] ?? pendingStop()
+  let next = session
+
+  if (stop.status === 'pending') {
+    next = arriveAndStartFulfillmentStop(next, address, now, transition)
+  } else if (stop.status === 'arrived' || stop.status === 'completed') {
+    next = updateFulfillmentStop(next, address, 'collecting', now, transition)
+  }
+
+  next = updateFulfillmentItem(next, row, status, now)
+  const allItemsHandled = stopRows.every((stopRow) => {
+    const itemStatus = next.items[String(stopRow)]?.status ?? 'pending'
+    return itemStatus === 'picked' || itemStatus === 'missing'
+  })
+
+  if (allItemsHandled && next.stops[address]?.status !== 'completed') {
+    next = updateFulfillmentStop(next, address, 'completed', now, transition)
+  }
+  return next
 }
 
 export function pauseFulfillmentSession(session: FulfillmentSession, now = new Date().toISOString()): FulfillmentSession {

@@ -1,5 +1,6 @@
 import { openDatabase, PRODUCTS_STORE, requestToPromise } from '../storage/database'
 import { simulateProductTechnicalData } from './simulation'
+import type { ProductResearchRecord, TechnicalVerificationStatus } from './researchTypes'
 
 export type Product = {
   id: string
@@ -9,13 +10,18 @@ export type Product = {
   location: string
   /** Optional internal product description shown on demand in the catalogue. */
   description?: string
+  brand?: string
+  netContent?: string
   unitsPerBox?: number
+  caseBarcode?: string
   itemSpec?: PhysicalSpec
   boxSpec?: PhysicalSpec & { maxTopLoadKg?: number }
   rigidity?: number
   fragility?: number
   imageDataUrl?: string
-  technicalDataSource?: 'manual' | 'simulated' | 'imported'
+  technicalDataSource?: 'manual' | 'simulated' | 'imported' | 'web'
+  technicalVerificationStatus?: TechnicalVerificationStatus
+  research?: ProductResearchRecord
   verificationStatus?: 'verified' | 'unverified'
   verificationSource?: 'manual' | 'imported' | 'recognition' | 'legacy'
   verifiedAt?: string
@@ -31,7 +37,7 @@ export type PhysicalSpec = {
 }
 
 export type ProductInput = Pick<Product, 'sku' | 'barcode' | 'name' | 'location'>
-  & Partial<Pick<Product, 'description' | 'unitsPerBox' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource' | 'verificationStatus' | 'verificationSource' | 'verifiedAt'>>
+  & Partial<Pick<Product, 'description' | 'brand' | 'netContent' | 'unitsPerBox' | 'caseBarcode' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource' | 'technicalVerificationStatus' | 'research' | 'verificationStatus' | 'verificationSource' | 'verifiedAt'>>
   & { id?: string }
 
 export async function listProducts() {

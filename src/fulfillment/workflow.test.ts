@@ -10,6 +10,7 @@ import {
   resumeFulfillmentSession,
   updateFulfillmentItem,
   updateFulfillmentFinish,
+  updateFulfillmentItemAtStop,
   updateFulfillmentLocation,
   updateFulfillmentStop,
   type FulfillmentSession,
@@ -106,6 +107,51 @@ describe('order fulfillment workflow', () => {
       distanceFromPreviousMeters: 12.4,
     })
     expect(collecting.events.slice(-2).map((event) => event.type)).toEqual(['stop_arrived', 'stop_collecting_started'])
+  })
+
+  it('starts and completes a stop automatically from item outcomes', () => {
+    let session = createFulfillmentSession('order-1', [1, 2], {
+      addresses: ['25.A'],
+      startAddress: '23.F',
+      now: '2026-08-19T08:00:00.000Z',
+    })
+    session = updateFulfillmentItemAtStop(
+      session,
+      '25.A',
+      [1, 2],
+      1,
+      'picked',
+      '2026-08-19T08:03:00.000Z',
+      { distanceMeters: 12.4 },
+    )
+    expect(session.stops['25.A']).toMatchObject({
+      status: 'collecting',
+      arrivedAt: '2026-08-19T08:03:00.000Z',
+      collectingAt: '2026-08-19T08:03:00.000Z',
+      completedAt: null,
+    })
+
+    session = updateFulfillmentItemAtStop(session, '25.A', [1, 2], 2, 'missing', '2026-08-19T08:05:00.000Z')
+    expect(session.stops['25.A']).toMatchObject({ status: 'completed', completedAt: '2026-08-19T08:05:00.000Z' })
+    expect(session.currentAddress).toBe('25.A')
+    expect(session.events.map((event) => event.type)).toEqual([
+      'order_started',
+      'stop_arrived',
+      'stop_collecting_started',
+      'item_status_changed',
+      'item_status_changed',
+      'stop_completed',
+    ])
+  })
+
+  it('reopens an automatically completed stop when an outcome is undone', () => {
+    let session = createFulfillmentSession('order-1', [1], { addresses: ['25.A'] })
+    session = updateFulfillmentItemAtStop(session, '25.A', [1], 1, 'picked', '2026-08-19T08:03:00.000Z')
+    expect(session.stops['25.A'].status).toBe('completed')
+
+    session = updateFulfillmentItemAtStop(session, '25.A', [1], 1, 'pending', '2026-08-19T08:04:00.000Z')
+    expect(session.stops['25.A']).toMatchObject({ status: 'collecting', completedAt: null })
+    expect(session.items['1']).toEqual({ status: 'pending', updatedAt: null })
   })
 
   it('pauses active timing and prevents work until the order is resumed', () => {

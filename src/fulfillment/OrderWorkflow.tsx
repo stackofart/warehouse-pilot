@@ -16,7 +16,6 @@ import {
   MapPin,
   Navigation,
   PackageCheck,
-  PackageOpen,
   PackageX,
   Pause,
   Play,
@@ -33,7 +32,6 @@ import { optimizeOrderRoute } from '../routing/optimizer'
 import { buildWarehouseGraph } from '../warehouse/graph'
 import { getFulfillmentSession, saveFulfillmentSession } from './storage'
 import {
-  arriveAndStartFulfillmentStop,
   completeFulfillmentSession,
   createFulfillmentSession,
   getFulfillmentActiveDuration,
@@ -42,10 +40,9 @@ import {
   pauseFulfillmentSession,
   reconcileFulfillmentSession,
   resumeFulfillmentSession,
-  updateFulfillmentItem,
+  updateFulfillmentItemAtStop,
   updateFulfillmentFinish,
   updateFulfillmentLocation,
-  updateFulfillmentStop,
   type FulfillmentItemStatus,
   type FulfillmentSession,
   type FulfillmentStopStatus,
@@ -177,10 +174,10 @@ function buildWorkflowStops(order: SavedOrder, session: FulfillmentSession | nul
 }
 
 function stopStatusLabel(status: FulfillmentStopStatus) {
-  if (status === 'arrived') return 'Прибыл'
+  if (status === 'arrived') return 'На точке'
   if (status === 'collecting') return 'Идёт сборка'
   if (status === 'completed') return 'Завершена'
-  return 'В пути'
+  return 'К сборке'
 }
 
 function travelStartForStop(session: FulfillmentSession, arrivedAt: string | null) {
@@ -201,8 +198,22 @@ function chunkStops(stops: WorkflowStop[], size = 4) {
   return chunks
 }
 
+function stopElementId(address: string) {
+  return `workflow-stop-${encodeURIComponent(address)}`
+}
+
 function scrollToStop(address: string) {
-  document.getElementById(`workflow-stop-${encodeURIComponent(address)}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  document.getElementById(stopElementId(address))?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function restoreStopViewportPosition(address: string, previousTop: number | null) {
+  if (previousTop === null) return
+  window.requestAnimationFrame(() => {
+    const element = document.getElementById(stopElementId(address))
+    if (!element) return
+    const offset = element.getBoundingClientRect().top - previousTop
+    if (Math.abs(offset) > 1) window.scrollBy(0, offset)
+  })
 }
 
 export function OrderWorkflow() {
@@ -214,7 +225,6 @@ export function OrderWorkflow() {
   const [startAddress, setStartAddress] = useState('')
   const [finishAddress, setFinishAddress] = useState(DEFAULT_FINISH_ADDRESS)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
-  const [expandedStops, setExpandedStops] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(true)
   const [isSessionLoading, setIsSessionLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -237,7 +247,6 @@ export function OrderWorkflow() {
   useEffect(() => {
     let cancelled = false
     setExpandedRows(new Set())
-    setExpandedStops(new Set())
     if (!order) {
       setSession(null)
       setIsSessionLoading(false)
@@ -330,44 +339,29 @@ export function OrderWorkflow() {
     await persistSession(updateFulfillmentFinish(session, address), session, 'Не удалось сохранить финишные ворота')
   }
 
-  const setStopStatus = async (stop: WorkflowStop, status: Exclude<FulfillmentStopStatus, 'pending'>) => {
-    if (!session || session.status !== 'in-progress') return
-    if (status === 'completed' && stop.items.some((item) => !['picked', 'missing'].includes(session.items[String(item.row)]?.status ?? 'pending'))) {
-      setError('Сначала отметьте все товары на этой остановке')
-      return
-    }
-    setError('')
-    const timestamp = new Date().toISOString()
-    const next = updateFulfillmentStop(session, stop.address, status, timestamp, {
-      fromAddress: session.currentAddress || session.startAddress,
-      distanceMeters: stop.distanceFromPrevious,
-    })
-    await persistSession(next, session, 'Не удалось сохранить статус остановки')
-    if (status === 'completed') {
-      setExpandedStops((current) => {
-        const collapsed = new Set(current)
-        collapsed.delete(stop.address)
-        return collapsed
-      })
-    }
-  }
-
-  const arriveAndStartStop = async (stop: WorkflowStop) => {
+  const setItemStatus = async (stop: WorkflowStop, row: number, status: FulfillmentItemStatus) => {
     if (!session || session.status !== 'in-progress') return
     setError('')
-    const timestamp = new Date().toISOString()
-    const next = arriveAndStartFulfillmentStop(session, stop.address, timestamp, {
-      fromAddress: session.currentAddress || session.startAddress,
-      distanceMeters: stop.distanceFromPrevious,
-    })
-    await persistSession(next, session, 'Не удалось начать сборку на остановке')
-  }
-
-  const setItemStatus = async (row: number, status: FulfillmentItemStatus) => {
-    if (!session || session.status !== 'in-progress') return
+    const stopElement = document.getElementById(stopElementId(stop.address))
+    const previousTop = stopElement?.getBoundingClientRect().top ?? null
     const currentStatus = session.items[String(row)]?.status ?? 'pending'
-    const next = updateFulfillmentItem(session, row, currentStatus === status ? 'pending' : status)
-    await persistSession(next, session, 'Не удалось сохранить отметку позиции')
+    const timestamp = new Date().toISOString()
+    const next = updateFulfillmentItemAtStop(
+      session,
+      stop.address,
+      stop.items.map((item) => item.row),
+      row,
+      currentStatus === status ? 'pending' : status,
+      timestamp,
+      {
+        fromAddress: session.currentAddress || session.startAddress,
+        distanceMeters: stop.distanceFromPrevious,
+      },
+    )
+    const saving = persistSession(next, session, 'Не удалось сохранить отметку позиции')
+    restoreStopViewportPosition(stop.address, previousTop)
+    await saving
+    restoreStopViewportPosition(stop.address, previousTop)
   }
 
   const toggleOrderPause = async () => {
@@ -404,22 +398,13 @@ export function OrderWorkflow() {
     })
   }
 
-  const toggleCompletedStop = (address: string) => {
-    setExpandedStops((current) => {
-      const next = new Set(current)
-      if (next.has(address)) next.delete(address)
-      else next.add(address)
-      return next
-    })
-  }
-
   if (isLoading) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><p>Открываем заказ…</p></div></div>
   if (!order) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><strong>Нет сохранённых заказов</strong><a className="primary-button" href="#new-order">Создать заказ</a></div></div>
 
   return (
     <div className="page workflow-page">
       <div className="page-heading workflow-heading">
-        <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>Заказ: маршрут и сборка</h1><p>Маршрут перестраивается от выбранной фактической точки после каждого прибытия.</p></div>
+        <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>Заказ: маршрут и сборка</h1><p>Отмечайте только результат по товару — прибытие, остановки и перестроение маршрута фиксируются автоматически.</p></div>
         <label className="order-selector"><span>Заказ</span><select aria-label="Заказ для комплектации" value={order.id} onChange={(event) => selectOrder(event.target.value)}>{orders.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.orderNumber || 'Без номера'}</option>)}</select></label>
       </div>
 
@@ -504,31 +489,16 @@ export function OrderWorkflow() {
           const stopProgress = session?.stops[stop.address]
           const stopStatus = stopProgress?.status ?? 'pending'
           const itemStatuses = stop.items.map((item) => session?.items[String(item.row)]?.status ?? 'pending')
-          const allItemsHandled = itemStatuses.every((status) => status === 'picked' || status === 'missing')
           const stopMissing = itemStatuses.some((status) => status === 'missing')
           const active = Boolean(session) && session!.status === 'in-progress' && (session!.currentAddress === stop.address || index === firstPendingStopIndex)
           const travelStart = session && stopProgress?.arrivedAt ? travelStartForStop(session, stopProgress.arrivedAt) : null
-          const itemNames = stop.items.map((item) => {
-            const product = productsByBarcode.get(item.barcode.replace(/\D/g, '')) ?? productsBySku.get(item.sku.replace(/\D/g, ''))
-            return product?.name || item.description || `Позиция ${item.row}`
-          })
-          const collapsed = stopStatus === 'completed' && !expandedStops.has(stop.address)
           return (
-            <article id={`workflow-stop-${encodeURIComponent(stop.address)}`} className={`workflow-stop ${stopStatus === 'completed' ? 'complete' : ''} ${collapsed ? 'collapsed' : ''} ${stopMissing ? 'has-missing' : ''} ${active ? 'active' : ''} ${stop.unresolved ? 'unresolved' : ''}`} key={`${stop.address}-${index}`}>
+            <article id={stopElementId(stop.address)} className={`workflow-stop ${stopStatus === 'completed' ? 'complete' : ''} ${stopMissing ? 'has-missing' : ''} ${active ? 'active' : ''} ${stop.unresolved ? 'unresolved' : ''}`} key={stop.address}>
               <div className="workflow-stop-marker">{stopStatus === 'completed' ? <Check size={17} /> : index + 1}</div>
               <div className="workflow-stop-card">
-                {collapsed ? (
-                  <button className="workflow-stop-collapsed-row" type="button" aria-expanded="false" onClick={() => toggleCompletedStop(stop.address)}>
-                    <span className="workflow-collapsed-point"><MapPin size={15} /><b>{stop.address}</b><small>Пункт {index + 1}</small></span>
-                    <span className="workflow-collapsed-products" dir="auto"><b>{itemNames.join(' · ')}</b><small>{stop.items.length} поз. · {itemStatuses.filter((status) => status === 'picked').length} собрано{stopMissing ? ` · ${itemStatuses.filter((status) => status === 'missing').length} отсутствует` : ''}</small></span>
-                    <span className="workflow-collapsed-metrics"><b>{stop.distanceFromPrevious === null ? 'Расстояние —' : `+${stop.distanceFromPrevious.toFixed(1)} м`}</b><small>{stopProgress?.collectingAt && session ? `Сборка ${formatActiveDuration(session, stopProgress.collectingAt, stopProgress.completedAt, now)}` : formatTime(stopProgress?.completedAt)}</small></span>
-                    <span className={`workflow-stop-status ${stopMissing ? 'missing' : 'completed'}`}>{stopMissing ? 'Есть отсутствующие' : 'Завершена'}</span>
-                    <ChevronDown size={18} />
-                  </button>
-                ) : <>
                   <header>
                     <div><span className="workflow-stop-address"><MapPin size={15} />{stop.address}</span><h2>Остановка {index + 1}{stop.historical ? ' · выполнена' : ''}</h2></div>
-                    <div className="workflow-stop-header-meta"><span className={`workflow-stop-status ${stopStatus}`}>{stopStatusLabel(stopStatus)}</span><span className="workflow-stop-distance">{stop.distanceFromPrevious === null ? (stop.historical ? 'пройдено' : 'ручная точка') : `+${stop.distanceFromPrevious.toFixed(1)} м`}<ChevronRight size={14} /></span>{stopStatus === 'completed' && <button className="workflow-collapse-toggle" type="button" aria-label={`Свернуть остановку ${stop.address}`} onClick={() => toggleCompletedStop(stop.address)}><ChevronUp size={17} /></button>}</div>
+                    <div className="workflow-stop-header-meta"><span className={`workflow-stop-status ${stopStatus}`}>{stopStatusLabel(stopStatus)}</span><span className="workflow-stop-distance">{stop.distanceFromPrevious === null ? (stop.historical ? 'пройдено' : 'ручная точка') : `+${stop.distanceFromPrevious.toFixed(1)} м`}<ChevronRight size={14} /></span></div>
                   </header>
 
                   {session && (
@@ -538,9 +508,8 @@ export function OrderWorkflow() {
                         <span><small>Переход</small><b>{stopProgress?.arrivedAt && travelStart ? formatActiveDuration(session, travelStart, stopProgress.arrivedAt, now) : '—'}</b></span>
                         <span><small>Сборка</small><b>{stopProgress?.collectingAt ? formatActiveDuration(session, stopProgress.collectingAt, stopProgress.completedAt, now) : '—'}</b></span>
                       </div>
-                      {session.status === 'in-progress' && stopStatus === 'pending' && <button type="button" className="primary-button stop-stage-button" disabled={isSaving} onClick={() => void arriveAndStartStop(stop)}><PackageOpen size={16} />Прибыл и начал сборку</button>}
-                      {session.status === 'in-progress' && stopStatus === 'arrived' && <button type="button" className="primary-button stop-stage-button" disabled={isSaving} onClick={() => void setStopStatus(stop, 'collecting')}><PackageOpen size={16} />Начать сборку</button>}
-                      {session.status === 'in-progress' && stopStatus === 'collecting' && <button type="button" className="primary-button stop-stage-button" disabled={isSaving || !allItemsHandled} title={!allItemsHandled ? 'Сначала отметьте все товары' : undefined} onClick={() => void setStopStatus(stop, 'completed')}><Check size={16} />Завершить остановку</button>}
+                      {session.status === 'in-progress' && stopStatus === 'pending' && <span className="workflow-stop-auto-note"><PackageCheck size={15} />Первая отметка зафиксирует прибытие</span>}
+                      {session.status === 'in-progress' && (stopStatus === 'arrived' || stopStatus === 'collecting') && <span className="workflow-stop-auto-note active"><PackageCheck size={15} />Последняя позиция завершит остановку</span>}
                       {stopStatus === 'completed' && <span className="workflow-stop-finished"><Check size={15} />{formatTime(stopProgress?.completedAt)}</span>}
                     </div>
                   )}
@@ -553,7 +522,7 @@ export function OrderWorkflow() {
                       const barcode = item.barcode || product?.barcode || '—'
                       const name = product?.name || item.description || `Позиция ${item.row}`
                       const verification = item.productVerification ?? (product && isProductVerified(product) ? 'verified' : 'unverified')
-                      const canHandle = Boolean(session) && session!.status === 'in-progress' && stopStatus === 'collecting'
+                      const canHandle = Boolean(session) && session!.status === 'in-progress'
                       return (
                         <div className={`workflow-pick-item ${status}`} key={item.row}>
                           <div className="workflow-item-copy">
@@ -569,18 +538,18 @@ export function OrderWorkflow() {
                                 {!product && <p>Подробные технические данные появятся после привязки позиции к товару в базе.</p>}
                               </div>
                             )}
+                            {status === 'checking' && <small className="workflow-checking-note">Проверка начата — выберите итоговый статус</small>}
                             {session?.items[String(item.row)]?.updatedAt && <small>Отмечено {formatTime(session.items[String(item.row)].updatedAt)}</small>}
                           </div>
                           <div className="workflow-item-actions">
-                            <button type="button" className="checking-button" disabled={!canHandle || isSaving} aria-pressed={status === 'checking'} onClick={() => void setItemStatus(item.row, 'checking')}>{status === 'checking' ? <Undo2 size={15} /> : <ShieldCheck size={15} />}{status === 'checking' ? 'Отменить' : 'Идёт проверка'}</button>
-                            <button type="button" className="pick-button" disabled={!canHandle || isSaving} aria-pressed={status === 'picked'} onClick={() => void setItemStatus(item.row, 'picked')}>{status === 'picked' ? <Undo2 size={15} /> : <PackageCheck size={15} />}{status === 'picked' ? 'Отменить' : 'Собрано'}</button>
-                            <button type="button" className="missing-button" disabled={!canHandle || isSaving} aria-pressed={status === 'missing'} onClick={() => void setItemStatus(item.row, 'missing')}>{status === 'missing' ? <Undo2 size={15} /> : <PackageX size={15} />}{status === 'missing' ? 'Отменить' : 'Нет товара'}</button>
+                            <button type="button" className="checking-button" disabled={!canHandle || isSaving} aria-pressed={status === 'checking'} onClick={() => void setItemStatus(stop, item.row, 'checking')}>{status === 'checking' ? <Undo2 size={15} /> : <ShieldCheck size={15} />}{status === 'checking' ? 'Отменить проверку' : 'Идёт проверка'}</button>
+                            <button type="button" className="pick-button" disabled={!canHandle || isSaving} aria-pressed={status === 'picked'} onClick={() => void setItemStatus(stop, item.row, 'picked')}>{status === 'picked' ? <Undo2 size={15} /> : <PackageCheck size={15} />}{status === 'picked' ? 'Отменить' : 'Собрано'}</button>
+                            <button type="button" className="missing-button" disabled={!canHandle || isSaving} aria-pressed={status === 'missing'} onClick={() => void setItemStatus(stop, item.row, 'missing')}>{status === 'missing' ? <Undo2 size={15} /> : <PackageX size={15} />}{status === 'missing' ? 'Отменить' : 'Нет товара'}</button>
                           </div>
                         </div>
                       )
                     })}
                   </div>
-                </>}
               </div>
             </article>
           )
