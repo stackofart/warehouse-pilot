@@ -20,9 +20,11 @@ import {
   Pause,
   Play,
   Route,
+  Search,
   ShieldCheck,
   Timer,
   Undo2,
+  X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { listOrders, type SavedOrder } from '../orders/storage'
@@ -31,6 +33,7 @@ import type { RecognizedOrderItem } from '../recognition/ocr'
 import { optimizeOrderRoute } from '../routing/optimizer'
 import { buildWarehouseGraph } from '../warehouse/graph'
 import { getFulfillmentSession, saveFulfillmentSession } from './storage'
+import { searchFulfillmentEntries, type FulfillmentSearchEntry } from './search'
 import {
   completeFulfillmentSession,
   createFulfillmentSession,
@@ -202,8 +205,18 @@ function stopElementId(address: string) {
   return `workflow-stop-${encodeURIComponent(address)}`
 }
 
+function itemElementId(row: number) {
+  return `workflow-item-${row}`
+}
+
 function scrollToStop(address: string) {
   document.getElementById(stopElementId(address))?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function scrollToItem(row: number) {
+  const element = document.getElementById(itemElementId(row))
+  element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  element?.focus({ preventScroll: true })
 }
 
 function restoreStopViewportPosition(address: string, previousTop: number | null) {
@@ -225,6 +238,8 @@ export function OrderWorkflow() {
   const [startAddress, setStartAddress] = useState('')
   const [finishAddress, setFinishAddress] = useState(DEFAULT_FINISH_ADDRESS)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
+  const [highlightedRow, setHighlightedRow] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSessionLoading, setIsSessionLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -247,6 +262,8 @@ export function OrderWorkflow() {
   useEffect(() => {
     let cancelled = false
     setExpandedRows(new Set())
+    setSearchQuery('')
+    setHighlightedRow(null)
     if (!order) {
       setSession(null)
       setIsSessionLoading(false)
@@ -281,6 +298,12 @@ export function OrderWorkflow() {
     return () => window.clearInterval(timer)
   }, [session?.status])
 
+  useEffect(() => {
+    if (highlightedRow === null) return
+    const timer = window.setTimeout(() => setHighlightedRow((current) => current === highlightedRow ? null : current), 3_000)
+    return () => window.clearTimeout(timer)
+  }, [highlightedRow])
+
   const warehouseAddresses = useMemo(() => {
     const result = buildWarehouseGraph()
     if (result.status !== 'ok') return []
@@ -295,6 +318,25 @@ export function OrderWorkflow() {
   const progress = getFulfillmentProgress(session)
   const firstPendingStopIndex = route?.stops.findIndex((stop) => (session?.stops[stop.address]?.status ?? 'pending') !== 'completed') ?? -1
   const routeRows = useMemo(() => chunkStops(route?.stops ?? []), [route])
+  const searchEntries = useMemo(() => {
+    const entries: FulfillmentSearchEntry[] = []
+    for (const stop of route?.stops ?? []) {
+      for (const item of stop.items) {
+        const product = productsByBarcode.get(item.barcode.replace(/\D/g, '')) ?? productsBySku.get(item.sku.replace(/\D/g, ''))
+        entries.push({
+          row: item.row,
+          address: stop.address,
+          name: product?.name || item.description || `Позиция ${item.row}`,
+          barcode: item.barcode || product?.barcode || '',
+          sku: item.sku || product?.sku || '',
+          status: session?.items[String(item.row)]?.status ?? 'pending',
+        })
+      }
+    }
+    return entries
+  }, [productsByBarcode, productsBySku, route, session])
+  const searchResults = useMemo(() => searchFulfillmentEntries(searchEntries, searchQuery), [searchEntries, searchQuery])
+  const visibleSearchResults = searchResults.slice(0, 8)
 
   const selectOrder = (id: string) => {
     setSelectedId(id)
@@ -398,6 +440,19 @@ export function OrderWorkflow() {
     })
   }
 
+  const goToSearchResult = (entry: FulfillmentSearchEntry) => {
+    setHighlightedRow(entry.row)
+    setSearchQuery('')
+    window.requestAnimationFrame(() => scrollToItem(entry.row))
+  }
+
+  const searchStatusLabel = (status: FulfillmentItemStatus) => {
+    if (status === 'picked') return 'Собрано'
+    if (status === 'checking') return 'Проверяется'
+    if (status === 'missing') return 'Нет товара'
+    return 'Ожидает'
+  }
+
   if (isLoading) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><p>Открываем заказ…</p></div></div>
   if (!order) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><strong>Нет сохранённых заказов</strong><a className="primary-button" href="#new-order">Создать заказ</a></div></div>
 
@@ -480,6 +535,40 @@ export function OrderWorkflow() {
         <div><span><b>{progress.handled}</b> из {order.items.length} позиций</span><strong>{session ? progress.percent : 0}%</strong></div>
         <div className="workflow-progress-track"><span style={{ width: `${session ? progress.percent : 0}%` }} /></div>
         <ul><li className="picked"><Check size={12} />Собрано: {progress.picked}</li><li className="checking"><ShieldCheck size={12} />Проверяется: {progress.checking}</li><li className="missing"><PackageX size={12} />Отсутствует: {progress.missing}</li><li>Осталось: {session ? progress.pending : order.items.length}</li></ul>
+        <form className="workflow-item-search" role="search" onSubmit={(event) => { event.preventDefault(); if (searchResults[0]) goToSearchResult(searchResults[0]) }}>
+          <label htmlFor="workflow-product-search">Быстрый переход к товару</label>
+          <div className="workflow-search-control">
+            <Search size={18} />
+            <input
+              id="workflow-product-search"
+              type="search"
+              inputMode="search"
+              autoComplete="off"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && searchResults[0]) {
+                  event.preventDefault()
+                  goToSearchResult(searchResults[0])
+                }
+              }}
+              placeholder="Название, штрихкод, מק״ט или адрес"
+            />
+            {searchQuery && <button type="button" aria-label="Очистить поиск товара" onClick={() => setSearchQuery('')}><X size={17} /></button>}
+          </div>
+          {searchQuery.trim() && (
+            <div className="workflow-search-results" aria-live="polite">
+              <div className="workflow-search-results-heading"><span>Найдено: {searchResults.length}</span>{searchResults.length > 0 && <small>Enter — перейти к первому</small>}</div>
+              {visibleSearchResults.length ? visibleSearchResults.map((entry) => (
+                <button type="button" key={entry.row} onClick={() => goToSearchResult(entry)}>
+                  <span><b dir="auto">{entry.name}</b><small><MapPin size={12} />{entry.address} · <Barcode size={12} />{entry.barcode || 'без штрихкода'}{entry.sku ? ` · מק״ט ${entry.sku}` : ''}</small></span>
+                  <em className={entry.status}>{searchStatusLabel(entry.status)}</em>
+                </button>
+              )) : <p>В этом заказе ничего не найдено.</p>}
+              {searchResults.length > visibleSearchResults.length && <p>Показаны первые {visibleSearchResults.length} результатов — уточните запрос.</p>}
+            </div>
+          )}
+        </form>
       </section>
 
       {route?.routeWarning && <div className="optimization-warning workflow-route-warning"><AlertTriangle size={17} /><span>{route.routeWarning} Ручные точки остаются в списке.</span></div>}
@@ -524,7 +613,7 @@ export function OrderWorkflow() {
                       const verification = item.productVerification ?? (product && isProductVerified(product) ? 'verified' : 'unverified')
                       const canHandle = Boolean(session) && session!.status === 'in-progress'
                       return (
-                        <div className={`workflow-pick-item ${status}`} key={item.row}>
+                        <div id={itemElementId(item.row)} tabIndex={-1} className={`workflow-pick-item ${status} ${highlightedRow === item.row ? 'search-highlight' : ''}`} key={item.row}>
                           <div className="workflow-item-copy">
                             <b dir="auto">{name}</b>
                             <span className={`verification-pill ${verification}`}>{verification === 'verified' ? <ShieldCheck size={12} /> : <AlertTriangle size={12} />}{verification === 'verified' ? 'Проверен' : 'Не проверен'}</span>

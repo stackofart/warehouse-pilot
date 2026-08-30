@@ -3,7 +3,6 @@ import {
   Camera,
   Check,
   CheckCircle2,
-  ChevronDown,
   ClipboardList,
   Cuboid,
   FileImage,
@@ -40,6 +39,9 @@ import { OrderWorkflow } from './fulfillment/OrderWorkflow'
 import { WarehouseMap } from './warehouse/WarehouseMap'
 import { OverviewDashboard } from './overview/OverviewDashboard'
 import { BarcodeScanner } from './scanner/BarcodeScanner'
+import { AdminWorkspace } from './admin/AdminWorkspace'
+import { RoleSwitcher } from './auth/RoleSwitcher'
+import { loadAppRole, saveAppRole, type AppRole } from './auth/roles'
 import './App.css'
 
 type OcrState = 'idle' | 'ready' | 'working' | 'success' | 'error'
@@ -109,6 +111,7 @@ function App() {
   const [productSyncMessage, setProductSyncMessage] = useState('')
   const [orderCount, setOrderCount] = useState(0)
   const [activeSection, setActiveSection] = useState<AppSection>(sectionFromHash)
+  const [userRole, setUserRole] = useState<AppRole>(loadAppRole)
 
   useEffect(() => {
     const updateSection = () => setActiveSection(sectionFromHash())
@@ -308,6 +311,14 @@ function App() {
 
   const validRows = items.filter((item) => item.warnings.length === 0).length
 
+  const changeUserRole = (role: AppRole) => {
+    saveAppRole(role)
+    setUserRole(role)
+    window.location.hash = role === 'admin' ? 'admin' : 'overview'
+  }
+
+  if (userRole === 'admin') return <AdminWorkspace role={userRole} onRoleChange={changeUserRole} />
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -336,18 +347,14 @@ function App() {
             <div><strong>Локальная база</strong><span>Заказы и товары остаются на устройстве</span></div>
           </div>
           <a href="#help" className="help-link"><HelpCircle size={18} />Помощь и поддержка</a>
-          <div className="profile">
-            <span className="avatar">АМ</span>
-            <div><strong>Алексей Морозов</strong><span>Сборщик</span></div>
-            <ChevronDown size={17} />
-          </div>
+          <RoleSwitcher role={userRole} onRoleChange={changeUserRole} />
         </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div>
-          <div className="shift-status"><span /> Смена активна <b>08:42</b></div>
+          <div className="worker-topbar-actions"><div className="shift-status"><span /> Смена активна <b>08:42</b></div><div className="worker-mobile-role"><RoleSwitcher compact role={userRole} onRoleChange={changeUserRole} /></div></div>
         </header>
 
         {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'scanner' ? <BarcodeScanner /> : activeSection === 'products' ? <ProductDatabase /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
