@@ -17,7 +17,8 @@ export type SharedProductImportResult = {
   errors: Array<{ index: number; error: string }>
 }
 
-const IMPORT_BATCH_SIZE = 50
+const IMPORT_BATCH_SIZE = 10
+const API_TIMEOUT_MS = 30_000
 
 export class SharedApiError extends Error {
   status: number
@@ -32,10 +33,23 @@ export class SharedApiError extends Error {
 }
 
 async function apiJson<T>(path: string, init?: RequestInit, fetcher: typeof fetch = fetch): Promise<T> {
-  const response = await fetcher(path, {
-    ...init,
-    headers: { accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}), ...init?.headers },
-  })
+  const controller = new AbortController()
+  const timeout = globalThis.setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetcher(path, {
+      ...init,
+      signal: controller.signal,
+      headers: { accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}), ...init?.headers },
+    })
+  } catch (reason) {
+    if (controller.signal.aborted) {
+      throw new SharedApiError('Сервер не ответил за 30 секунд. Перенос остановлен — уже обработанные пакеты сохранены.', 408, 'request_timeout')
+    }
+    throw reason
+  } finally {
+    globalThis.clearTimeout(timeout)
+  }
   const body = await response.json().catch(() => null)
   if (!response.ok) {
     const fallback = response.status === 413
@@ -96,7 +110,11 @@ export function productForSharedImport(product: ProductInput) {
   }
 }
 
-export async function importSharedProducts(products: ProductInput[], fetcher: typeof fetch = fetch): Promise<SharedProductImportResult> {
+export async function importSharedProducts(
+  products: ProductInput[],
+  fetcher: typeof fetch = fetch,
+  onProgress?: (processed: number, total: number) => void,
+): Promise<SharedProductImportResult> {
   const result: SharedProductImportResult = { created: 0, updated: 0, skipped: 0, errors: [] }
 
   for (let offset = 0; offset < products.length; offset += IMPORT_BATCH_SIZE) {
@@ -109,6 +127,7 @@ export async function importSharedProducts(products: ProductInput[], fetcher: ty
     result.updated += imported.updated
     result.skipped += imported.skipped
     result.errors.push(...imported.errors.map((error) => ({ ...error, index: error.index + offset })))
+    onProgress?.(Math.min(offset + batch.length, products.length), products.length)
   }
 
   return result

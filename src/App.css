@@ -1574,6 +1574,17 @@
 .admin-shared-product-list em { width: fit-content; padding: 5px 8px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 900; }
 .admin-shared-product-list em.verified { color: #28795c; background: #e5f4ed; }
 .admin-shared-product-list em.unverified { color: #966a24; background: #fff0d5; }
+.admin-product-directory { overflow: hidden; border-radius: 0 0 13px 13px; }
+.admin-product-directory-details { padding-bottom: 16px; }
+.admin-product-directory .product-detail-description small { display: block; margin-top: 11px; color: #71827a; font-size: 13px; }
+.admin-product-directory .product-detail-description small b { color: #3c5148; }
+.admin-product-detail-groups { padding: 0 0 14px; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; }
+.admin-product-detail-groups section { min-width: 0; padding: 12px; display: grid; align-content: start; gap: 5px; border: 1px solid #dfe8e4; border-radius: 9px; background: #fff; }
+.admin-product-detail-groups section > span { color: #819089; font-size: 10px; font-weight: 850; letter-spacing: .35px; text-transform: uppercase; }
+.admin-product-detail-groups section > b { overflow-wrap: anywhere; color: #344c41; font-size: 14px; line-height: 1.4; }
+.admin-product-detail-groups section > small { overflow-wrap: anywhere; color: #74857d; font-size: 12px; line-height: 1.4; }
+.admin-product-detail-meta { padding-top: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 7px 15px; border-top: 1px solid #e3ebe7; color: #7b8c84; font-size: 11px; }
+.admin-product-detail-meta svg { color: #45866e; }
 
 @media (max-width: 900px) {
   .admin-user-form { grid-template-columns: 38px 1fr 1fr; }
@@ -1582,6 +1593,7 @@
   .admin-catalog-summary form { grid-column: 1 / -1; }
   .admin-product-create form { grid-template-columns: 1fr 1fr; }
   .admin-product-create label.wide { grid-column: 1 / -1; }
+  .admin-product-detail-groups { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -1596,6 +1608,7 @@
   .admin-catalog-summary { grid-template-columns: 1fr 1fr; }
   .admin-shared-product-list article { grid-template-columns: minmax(0,1fr) auto; }
   .admin-shared-product-list article > em, .admin-shared-product-list article > small { justify-self: start; }
+  .admin-product-directory .product-detail-image { min-height: 145px; }
 }
 
 @media (max-width: 460px) {
@@ -1606,4 +1619,5 @@
   .admin-catalog-summary form { grid-column: auto; }
   .admin-product-create form { grid-template-columns: 1fr; }
   .admin-product-create label.wide { grid-column: auto; }
+  .admin-product-detail-groups { grid-template-columns: 1fr; }
 }

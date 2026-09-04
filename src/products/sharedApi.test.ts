@@ -38,7 +38,7 @@ describe('shared catalog api', () => {
   })
 
   it('imports large local catalogs in bounded batches and aggregates row errors', async () => {
-    const products = Array.from({ length: 51 }, (_, index) => ({
+    const products = Array.from({ length: 11 }, (_, index) => ({
       id: `p${index}`,
       sku: String(1000 + index),
       barcode: `729012192${String(index).padStart(3, '0')}`,
@@ -57,14 +57,16 @@ describe('shared catalog api', () => {
       }), { status: 200 })
     }) as unknown as typeof fetch
 
-    await expect(importSharedProducts(products, fetcher)).resolves.toEqual({
-      created: 49,
+    const progress = vi.fn()
+    await expect(importSharedProducts(products, fetcher, progress)).resolves.toEqual({
+      created: 9,
       updated: 0,
       skipped: 2,
-      errors: [{ index: 49, error: 'invalid' }, { index: 50, error: 'invalid' }],
+      errors: [{ index: 9, error: 'invalid' }, { index: 10, error: 'invalid' }],
     })
     expect(fetcher).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).products).toHaveLength(50)
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).products).toHaveLength(10)
     expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).products).toHaveLength(1)
+    expect(progress.mock.calls).toEqual([[10, 11], [11, 11]])
   })
 })
