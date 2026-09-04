@@ -25,6 +25,7 @@ export type FulfillmentEventType =
   | 'stop_collecting_started'
   | 'stop_completed'
   | 'item_status_changed'
+  | 'items_bulk_picked'
   | 'order_paused'
   | 'order_resumed'
   | 'order_completed'
@@ -37,6 +38,7 @@ export type FulfillmentEvent = {
   fromAddress?: string
   toAddress?: string
   row?: number
+  rows?: number[]
   previousItemStatus?: FulfillmentItemStatus
   itemStatus?: FulfillmentItemStatus
   distanceMeters?: number | null
@@ -44,6 +46,8 @@ export type FulfillmentEvent = {
 
 export type FulfillmentSession = {
   orderId: string
+  /** Fast mode records exceptions and accepts untouched rows together on completion. */
+  mode: 'route' | 'fast'
   status: 'in-progress' | 'paused' | 'completed'
   startedAt: string
   completedAt: string | null
@@ -77,6 +81,7 @@ type CreateFulfillmentOptions = {
   startAddress?: string
   finishAddress?: string
   now?: string
+  mode?: 'route' | 'fast'
 }
 
 const pendingStop = (): FulfillmentStopProgress => ({
@@ -120,6 +125,7 @@ export function createFulfillmentSession(
   const finishAddress = normalizeAddress(options.finishAddress ?? '40.D')
   const session: FulfillmentSession = {
     orderId,
+    mode: options.mode ?? 'route',
     status: 'in-progress',
     startedAt: now,
     completedAt: null,
@@ -399,6 +405,7 @@ export function reconcileFulfillmentSession(
   const mustReopenCompletedSession = session.status === 'completed' && (itemsChanged || (hadSavedStops && stopsChanged))
   const changed = itemsChanged
     || stopsChanged
+    || session.mode === undefined
     || session.startAddress === undefined
     || session.currentAddress === undefined
     || session.finishAddress === undefined
@@ -407,8 +414,9 @@ export function reconcileFulfillmentSession(
     || session.stops === undefined
     || session.events === undefined
   return changed
-    ? {
+      ? {
         ...session,
+        mode: session.mode ?? 'route',
         status: mustReopenCompletedSession ? 'in-progress' : session.status,
         completedAt: mustReopenCompletedSession ? null : session.completedAt,
         pausedAt: mustReopenCompletedSession ? null : (session.pausedAt ?? null),
@@ -447,5 +455,34 @@ export function completeFulfillmentSession(session: FulfillmentSession, now = ne
     completedAt: now,
     updatedAt: now,
     events: withEvent(session, { type: 'order_completed', at: now }),
+  }
+}
+
+/**
+ * Completes the low-interaction picking flow. Explicit exceptions are kept,
+ * while every untouched row is accepted as picked in one auditable event.
+ */
+export function completeFastFulfillmentSession(session: FulfillmentSession, now = new Date().toISOString()): FulfillmentSession {
+  assertSessionIsActive(session)
+  const checkingRows = Object.entries(session.items)
+    .filter(([, item]) => item.status === 'checking')
+    .map(([row]) => Number(row))
+  if (checkingRows.length) throw new Error('Сначала завершите проверку отмеченных позиций')
+
+  const rows = Object.entries(session.items)
+    .filter(([, item]) => item.status === 'pending')
+    .map(([row]) => Number(row))
+  const items = { ...session.items }
+  rows.forEach((row) => { items[String(row)] = { status: 'picked', updatedAt: now } })
+  const accepted = rows.length
+    ? { ...session, mode: 'fast' as const, items, updatedAt: now, events: withEvent(session, { type: 'items_bulk_picked', at: now, rows }) }
+    : { ...session, mode: 'fast' as const, items, updatedAt: now }
+
+  return {
+    ...accepted,
+    status: 'completed',
+    completedAt: now,
+    updatedAt: now,
+    events: withEvent(accepted, { type: 'order_completed', at: now }),
   }
 }

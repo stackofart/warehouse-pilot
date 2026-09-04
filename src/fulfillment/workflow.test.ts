@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   arriveAndStartFulfillmentStop,
+  completeFastFulfillmentSession,
   completeFulfillmentSession,
   createFulfillmentSession,
   getFulfillmentActiveDuration,
@@ -49,6 +50,27 @@ describe('order fulfillment workflow', () => {
     session = completeFulfillmentSession(session, '2026-08-19T08:10:00.000Z')
     expect(session).toMatchObject({ status: 'completed', completedAt: '2026-08-19T08:10:00.000Z' })
     expect(() => updateFulfillmentItem(session, 1, 'pending')).toThrow('Завершённый заказ нельзя изменить')
+  })
+
+  it('finishes fast picking by accepting untouched rows in one event', () => {
+    let session = createFulfillmentSession('order-1', [1, 2, 3], { mode: 'fast', now: '2026-08-19T08:00:00.000Z' })
+    session = updateFulfillmentItem(session, 2, 'missing', '2026-08-19T08:02:00.000Z')
+    const completed = completeFastFulfillmentSession(session, '2026-08-19T08:10:00.000Z')
+
+    expect(completed).toMatchObject({ mode: 'fast', status: 'completed', completedAt: '2026-08-19T08:10:00.000Z' })
+    expect(completed.items['1']).toEqual({ status: 'picked', updatedAt: '2026-08-19T08:10:00.000Z' })
+    expect(completed.items['2'].status).toBe('missing')
+    expect(completed.items['3'].status).toBe('picked')
+    expect(completed.events.slice(-2)).toMatchObject([
+      { type: 'items_bulk_picked', rows: [1, 3] },
+      { type: 'order_completed' },
+    ])
+  })
+
+  it('does not finish fast picking while an exception is being checked', () => {
+    let session = createFulfillmentSession('order-1', [1], { mode: 'fast' })
+    session = updateFulfillmentItem(session, 1, 'checking')
+    expect(() => completeFastFulfillmentSession(session)).toThrow('Сначала завершите проверку')
   })
 
   it('reconciles a saved session when order rows change', () => {

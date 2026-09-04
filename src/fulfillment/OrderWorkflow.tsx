@@ -26,7 +26,7 @@ import {
   Undo2,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { listOrders, type SavedOrder } from '../orders/storage'
 import { isProductVerified, listProducts, type Product } from '../products/storage'
 import type { RecognizedOrderItem } from '../recognition/ocr'
@@ -36,6 +36,7 @@ import { getFulfillmentSession, saveFulfillmentSession } from './storage'
 import { searchFulfillmentEntries, type FulfillmentSearchEntry } from './search'
 import {
   completeFulfillmentSession,
+  completeFastFulfillmentSession,
   createFulfillmentSession,
   getFulfillmentActiveDuration,
   getFulfillmentActiveDurationBetween,
@@ -43,6 +44,7 @@ import {
   pauseFulfillmentSession,
   reconcileFulfillmentSession,
   resumeFulfillmentSession,
+  updateFulfillmentItem,
   updateFulfillmentItemAtStop,
   updateFulfillmentFinish,
   updateFulfillmentLocation,
@@ -67,10 +69,23 @@ type WorkflowRoute = {
   routeWarning: string
 }
 
+type WorkflowMode = 'fast' | 'route'
+type FastFilter = 'all' | 'pending' | 'issues' | 'picked'
+type FastSort = 'sheet' | 'family'
+
 const timeFormatter = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const CENTRAL_START_LABEL = 'Центральный вход'
 const FINISH_ADDRESSES = ['40.A', '40.B', '40.D'] as const
 const DEFAULT_FINISH_ADDRESS = '40.D'
+const WORKFLOW_MODE_KEY = 'warehouse-pilot.workflow-mode'
+
+function initialWorkflowMode(): WorkflowMode {
+  try {
+    return window.localStorage.getItem(WORKFLOW_MODE_KEY) === 'route' ? 'route' : 'fast'
+  } catch {
+    return 'fast'
+  }
+}
 
 function orderIdFromHash() {
   const encodedId = window.location.hash.match(/^#(?:work|route)\/(.+)$/)?.[1] ?? ''
@@ -117,6 +132,17 @@ function formatPhysicalSpec(spec: Product['boxSpec'] | Product['itemSpec']) {
   const dimensions = [spec.lengthCm, spec.widthCm, spec.heightCm]
   const size = dimensions.every((value) => Number(value) > 0) ? `${dimensions.join(' × ')} см` : 'габариты не указаны'
   return spec.weightKg ? `${size}, ${spec.weightKg} кг` : size
+}
+
+function productFamily(product: Product | undefined, fallbackName: string) {
+  const dimensions = product?.boxSpec
+    ? [product.boxSpec.lengthCm, product.boxSpec.widthCm, product.boxSpec.heightCm].filter(Boolean).join('×')
+    : ''
+  const label = [product?.brand?.trim(), dimensions && `${dimensions} см`].filter(Boolean).join(' · ')
+  return {
+    key: `${product?.brand?.trim().toLocaleLowerCase() || fallbackName.trim().split(/\s+/)[0]?.toLocaleLowerCase() || 'прочее'}|${dimensions || 'без-габаритов'}`,
+    label: label || 'Без определённой товарной группы',
+  }
 }
 
 function buildWorkflowStops(order: SavedOrder, session: FulfillmentSession | null, draftStartAddress: string, draftFinishAddress: string): WorkflowRoute {
@@ -237,6 +263,10 @@ export function OrderWorkflow() {
   const [session, setSession] = useState<FulfillmentSession | null>(null)
   const [startAddress, setStartAddress] = useState('')
   const [finishAddress, setFinishAddress] = useState(DEFAULT_FINISH_ADDRESS)
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(initialWorkflowMode)
+  const [fastFilter, setFastFilter] = useState<FastFilter>('all')
+  const [fastSort, setFastSort] = useState<FastSort>('sheet')
+  const [fastActionRow, setFastActionRow] = useState<number | null>(null)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null)
@@ -264,6 +294,8 @@ export function OrderWorkflow() {
     setExpandedRows(new Set())
     setSearchQuery('')
     setHighlightedRow(null)
+    setFastActionRow(null)
+    setFastFilter('all')
     if (!order) {
       setSession(null)
       setIsSessionLoading(false)
@@ -299,6 +331,10 @@ export function OrderWorkflow() {
   }, [session?.status])
 
   useEffect(() => {
+    try { window.localStorage.setItem(WORKFLOW_MODE_KEY, workflowMode) } catch { /* Private mode can disable storage. */ }
+  }, [workflowMode])
+
+  useEffect(() => {
     if (highlightedRow === null) return
     const timer = window.setTimeout(() => setHighlightedRow((current) => current === highlightedRow ? null : current), 3_000)
     return () => window.clearTimeout(timer)
@@ -316,6 +352,7 @@ export function OrderWorkflow() {
   const productsBySku = useMemo(() => new Map(products.filter((product) => product.sku).map((product) => [product.sku.replace(/\D/g, ''), product])), [products])
   const route = useMemo(() => order ? buildWorkflowStops(order, session, startAddress, finishAddress) : null, [order, session, startAddress, finishAddress])
   const progress = getFulfillmentProgress(session)
+  const fastPendingCount = Object.values(session?.items ?? {}).filter((item) => item.status === 'pending').length
   const firstPendingStopIndex = route?.stops.findIndex((stop) => (session?.stops[stop.address]?.status ?? 'pending') !== 'completed') ?? -1
   const routeRows = useMemo(() => chunkStops(route?.stops ?? []), [route])
   const searchEntries = useMemo(() => {
@@ -337,6 +374,22 @@ export function OrderWorkflow() {
   }, [productsByBarcode, productsBySku, route, session])
   const searchResults = useMemo(() => searchFulfillmentEntries(searchEntries, searchQuery), [searchEntries, searchQuery])
   const visibleSearchResults = searchResults.slice(0, 8)
+  const fastItems = useMemo(() => {
+    if (!order) return []
+    const entries = order.items.map((item, sheetIndex) => {
+      const product = productsByBarcode.get(item.barcode.replace(/\D/g, '')) ?? productsBySku.get(item.sku.replace(/\D/g, ''))
+      const status = session?.items[String(item.row)]?.status ?? 'pending'
+      const name = product?.name || item.description || `Позиция ${item.row}`
+      return { item, product, status, name, sheetIndex, family: productFamily(product, name) }
+    })
+    if (fastSort === 'family') entries.sort((left, right) => left.family.key.localeCompare(right.family.key) || left.sheetIndex - right.sheetIndex)
+    return entries.filter(({ status }) => {
+      if (fastFilter === 'pending') return status === 'pending'
+      if (fastFilter === 'issues') return status === 'checking' || status === 'missing'
+      if (fastFilter === 'picked') return status === 'picked'
+      return true
+    })
+  }, [fastFilter, fastSort, order, productsByBarcode, productsBySku, session])
 
   const selectOrder = (id: string) => {
     setSelectedId(id)
@@ -366,6 +419,7 @@ export function OrderWorkflow() {
       addresses: uniqueOrderAddresses(order),
       startAddress,
       finishAddress,
+      mode: workflowMode,
     })
     await persistSession(next, session, 'Не удалось начать комплектацию')
   }
@@ -406,6 +460,15 @@ export function OrderWorkflow() {
     restoreStopViewportPosition(stop.address, previousTop)
   }
 
+  const setFastItemStatus = async (row: number, status: FulfillmentItemStatus) => {
+    if (!session || session.status !== 'in-progress') return
+    setError('')
+    const currentStatus = session.items[String(row)]?.status ?? 'pending'
+    const nextStatus = currentStatus === status ? 'pending' : status
+    await persistSession(updateFulfillmentItem(session, row, nextStatus), session, 'Не удалось сохранить отметку позиции')
+    setFastActionRow(null)
+  }
+
   const toggleOrderPause = async () => {
     if (!session || session.status === 'completed') return
     setError('')
@@ -417,9 +480,17 @@ export function OrderWorkflow() {
 
   const finishOrder = async () => {
     if (!session) return
+    const untouched = Object.values(session.items).filter((item) => item.status === 'pending').length
+    if (workflowMode === 'fast') {
+      if (progress.checking > 0) {
+        setError('Сначала завершите проверку отмеченных позиций')
+        return
+      }
+      if (untouched > 0 && !window.confirm(`Завершить заказ? ${untouched} неотмеченных позиций будут записаны как собранные.`)) return
+    }
     setIsSaving(true)
     try {
-      const next = completeFulfillmentSession(session)
+      const next = workflowMode === 'fast' ? completeFastFulfillmentSession(session) : completeFulfillmentSession(session)
       await saveFulfillmentSession(next)
       setSession(next)
       setNow(Date.now())
@@ -442,8 +513,9 @@ export function OrderWorkflow() {
 
   const goToSearchResult = (entry: FulfillmentSearchEntry) => {
     setHighlightedRow(entry.row)
+    setFastFilter('all')
     setSearchQuery('')
-    window.requestAnimationFrame(() => scrollToItem(entry.row))
+    window.setTimeout(() => scrollToItem(entry.row), 0)
   }
 
   const searchStatusLabel = (status: FulfillmentItemStatus) => {
@@ -459,7 +531,7 @@ export function OrderWorkflow() {
   return (
     <div className="page workflow-page">
       <div className="page-heading workflow-heading">
-        <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>Заказ: маршрут и сборка</h1><p>Отмечайте только результат по товару — прибытие, остановки и перестроение маршрута фиксируются автоматически.</p></div>
+        <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>{workflowMode === 'fast' ? 'Быстрая сборка заказа' : 'Заказ: маршрут и сборка'}</h1><p>{workflowMode === 'fast' ? 'Отмечайте только исключения. Остальные позиции можно подтвердить вместе при завершении заказа.' : 'Отмечайте результат по товару — прибытие и остановки фиксируются автоматически.'}</p></div>
         <label className="order-selector"><span>Заказ</span><select aria-label="Заказ для комплектации" value={order.id} onChange={(event) => selectOrder(event.target.value)}>{orders.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.orderNumber || 'Без номера'}</option>)}</select></label>
       </div>
 
@@ -467,33 +539,37 @@ export function OrderWorkflow() {
 
       <nav className="workflow-order-navigation" aria-label="Разделы заказа">
         <a className="secondary-button" href="#orders"><ClipboardList size={15} />Все заказы</a>
-        <a className="active" aria-current="page" href={`#work/${encodeURIComponent(order.id)}`}><Route size={15} />Маршрут и сборка</a>
+        <a className="active" aria-current="page" href={`#work/${encodeURIComponent(order.id)}`}><Route size={15} />Сборка</a>
         <a className="secondary-button" href={`#pallet/${encodeURIComponent(order.id)}`}><Cuboid size={15} />Паллета</a>
       </nav>
+
+      <section className="workflow-mode-switch" aria-label="Режим комплектации">
+        <div><button type="button" className={workflowMode === 'fast' ? 'active' : ''} aria-pressed={workflowMode === 'fast'} onClick={() => setWorkflowMode('fast')}><PackageCheck size={16} />Быстрый режим</button><button type="button" className={workflowMode === 'route' ? 'active' : ''} aria-pressed={workflowMode === 'route'} onClick={() => setWorkflowMode('route')}><Route size={16} />С маршрутом</button></div>
+        <p>{workflowMode === 'fast' ? 'Основной сценарий для телефона: полный список остаётся на месте, фиксируются только проблемы.' : 'Экспериментальный старый сценарий с остановками, расстояниями и картой маршрута.'}</p>
+      </section>
 
       <section className="workflow-overview">
         <div className="workflow-order-title"><span className={`workflow-status ${session?.status ?? 'not-started'}`}>{session?.status === 'completed' ? 'Завершён' : session?.status === 'paused' ? 'На паузе' : session ? 'В работе' : 'Не начат'}</span><h2>{order.orderNumber || 'Заказ без номера'}</h2><p>{order.items.length} позиций в заказе</p></div>
         <div className="workflow-stat"><Clock3 size={17} /><span><small>Начало</small><strong>{formatTime(session?.startedAt)}</strong></span></div>
         <div className="workflow-stat"><Timer size={17} /><span><small>Активное время</small><strong>{session ? formatMilliseconds(getFulfillmentActiveDuration(session, now)) : '0 мин 00 сек'}</strong></span></div>
-        <div className="workflow-stat"><Navigation size={17} /><span><small>Осталось пройти</small><strong>{route?.totalDistance === null ? 'частично' : `${route?.totalDistance.toFixed(1)} м`}</strong></span></div>
+        <div className="workflow-stat">{workflowMode === 'fast' ? <AlertTriangle size={17} /> : <Navigation size={17} />}<span><small>{workflowMode === 'fast' ? 'Исключения' : 'Осталось пройти'}</small><strong>{workflowMode === 'fast' ? progress.checking + progress.missing : route?.totalDistance === null ? 'частично' : `${route?.totalDistance.toFixed(1)} м`}</strong></span></div>
         {!session ? (
           <div className="workflow-start-action">
-            <label><span>Стартовая точка</span><select aria-label="Стартовая точка заказа" value={startAddress} onChange={(event) => setStartAddress(event.target.value)}><option value="">{CENTRAL_START_LABEL}</option>{warehouseAddresses.map((address) => <option key={address} value={address}>{address}</option>)}</select></label>
-            <label><span>Ворота погрузки</span><select aria-label="Финишные ворота заказа" value={finishAddress} onChange={(event) => setFinishAddress(event.target.value)}>{FINISH_ADDRESSES.map((address) => <option key={address} value={address}>{address}</option>)}</select></label>
-            <button className="primary-button workflow-main-action" disabled={isSaving || isSessionLoading} onClick={() => void startOrder()}><Play size={17} />Начать заказ</button>
+            {workflowMode === 'route' && <><label><span>Стартовая точка</span><select aria-label="Стартовая точка заказа" value={startAddress} onChange={(event) => setStartAddress(event.target.value)}><option value="">{CENTRAL_START_LABEL}</option>{warehouseAddresses.map((address) => <option key={address} value={address}>{address}</option>)}</select></label><label><span>Ворота погрузки</span><select aria-label="Финишные ворота заказа" value={finishAddress} onChange={(event) => setFinishAddress(event.target.value)}>{FINISH_ADDRESSES.map((address) => <option key={address} value={address}>{address}</option>)}</select></label></>}
+            <button className="primary-button workflow-main-action" disabled={isSaving || isSessionLoading} onClick={() => void startOrder()}><Play size={17} />{workflowMode === 'fast' ? 'Начать быструю сборку' : 'Начать заказ'}</button>
           </div>
         ) : session.status === 'completed' ? (
           <div className="workflow-completed-time"><Flag size={18} /><span><small>Завершён в</small><strong>{formatTime(session.completedAt)}</strong></span></div>
         ) : (
           <div className="workflow-main-actions">
             <button className={session.status === 'paused' ? 'primary-button workflow-main-action' : 'secondary-button workflow-main-action'} disabled={isSaving} onClick={() => void toggleOrderPause()}>{session.status === 'paused' ? <Play size={17} /> : <Pause size={17} />}{session.status === 'paused' ? 'Продолжить' : 'Пауза'}</button>
-            {session.status === 'in-progress' && <button className="primary-button workflow-main-action" disabled={isSaving || progress.pending > 0 || Object.values(session.stops).some((stop) => stop.status !== 'completed')} onClick={() => void finishOrder()}><Flag size={17} />Завершить заказ</button>}
+            {workflowMode === 'route' && session.status === 'in-progress' && <button className="primary-button workflow-main-action" disabled={isSaving || progress.pending > 0 || Object.values(session.stops).some((stop) => stop.status !== 'completed')} onClick={() => void finishOrder()}><Flag size={17} />Завершить заказ</button>}
             {session.status === 'paused' && <small>Пауза с {formatTime(session.pausedAt)}</small>}
           </div>
         )}
       </section>
 
-      {session && session.status !== 'completed' && (
+      {workflowMode === 'route' && session && session.status !== 'completed' && (
         <section className={`workflow-location-bar ${session.status}`}>
           <div><MapPin size={17} /><span><b>Фактическая точка</b><small>Изменение сразу пересчитает оставшийся маршрут</small></span></div>
           <div className="workflow-location-selectors">
@@ -503,7 +579,7 @@ export function OrderWorkflow() {
         </section>
       )}
 
-      {route && (routeRows.length > 0 || route.finishAddress) && (
+      {workflowMode === 'route' && route && (routeRows.length > 0 || route.finishAddress) && (
         <section className="workflow-route-scheme" aria-label="Схема остановок маршрута">
           <div className="workflow-scheme-heading"><div><Route size={18} /><span><b>Схема маршрута</b><small>Нажмите на остановку, чтобы перейти к ней в списке</small></span></div><div className="workflow-route-endpoints"><strong>{session?.currentAddress || session?.startAddress || startAddress || CENTRAL_START_LABEL}</strong><ChevronRight size={14} /><strong><Flag size={12} />{route.finishAddress}</strong></div></div>
           <div className="workflow-route-snake">
@@ -571,9 +647,62 @@ export function OrderWorkflow() {
         </form>
       </section>
 
-      {route?.routeWarning && <div className="optimization-warning workflow-route-warning"><AlertTriangle size={17} /><span>{route.routeWarning} Ручные точки остаются в списке.</span></div>}
+      {workflowMode === 'fast' && <section className="fast-picking-panel" aria-label="Быстрый список заказа">
+        <header className="fast-picking-toolbar">
+          <div className="fast-filter-tabs" role="group" aria-label="Фильтр позиций">
+            <button type="button" className={fastFilter === 'all' ? 'active' : ''} onClick={() => setFastFilter('all')}>Все <b>{order.items.length}</b></button>
+            <button type="button" className={fastFilter === 'pending' ? 'active' : ''} onClick={() => setFastFilter('pending')}>Не отмечены <b>{fastPendingCount}</b></button>
+            <button type="button" className={fastFilter === 'issues' ? 'active issue' : ''} onClick={() => setFastFilter('issues')}>Проблемы <b>{progress.checking + progress.missing}</b></button>
+            <button type="button" className={fastFilter === 'picked' ? 'active' : ''} onClick={() => setFastFilter('picked')}>Собрано <b>{progress.picked}</b></button>
+          </div>
+          <label className="fast-sort-select"><span>Порядок</span><select value={fastSort} onChange={(event) => setFastSort(event.target.value as FastSort)}><option value="sheet">Как в листе</option><option value="family">Товарные группы</option></select></label>
+        </header>
 
-      <section className="workflow-timeline" aria-label="Остановки маршрута">
+        <div className="fast-picking-list">
+          {fastItems.length ? fastItems.map((entry, index) => {
+            const { item, product, status, name, family } = entry
+            const expanded = expandedRows.has(item.row)
+            const actionOpen = fastActionRow === item.row
+            const canHandle = Boolean(session) && session!.status === 'in-progress' && !isSaving
+            const verification = item.productVerification ?? (product && isProductVerified(product) ? 'verified' : 'unverified')
+            const statusLabel = status === 'picked' ? 'Собрано' : status === 'checking' ? 'Проверка' : status === 'missing' ? 'Нет товара' : 'Проблема'
+            const showFamily = fastSort === 'family' && (index === 0 || fastItems[index - 1].family.key !== family.key)
+            return <Fragment key={item.row}>
+              {showFamily && <div className="fast-family-heading"><span>{family.label}</span><small>одинаковый бренд или форм-фактор</small></div>}
+              <article id={itemElementId(item.row)} tabIndex={-1} className={`fast-pick-row ${status} ${highlightedRow === item.row ? 'search-highlight' : ''}`}>
+                <span className="fast-row-number">{item.row}</span>
+                <button className="fast-row-main" type="button" aria-expanded={expanded} onClick={() => toggleRowDetails(item.row)}>
+                  <b dir="auto">{name}</b>
+                  <span><strong><MapPin size={12} />{product?.location || itemAddress(item)}</strong><em>{item.boxCount || '?'} кор. · {item.quantity || '?'} шт.</em><small>{item.barcode || product?.barcode || 'без штрихкода'}</small></span>
+                </button>
+                <button className={`fast-row-status ${status}`} type="button" disabled={!canHandle} aria-expanded={actionOpen} onClick={() => setFastActionRow((current) => current === item.row ? null : item.row)}>{status === 'picked' ? <Check size={16} /> : status === 'checking' ? <ShieldCheck size={16} /> : status === 'missing' ? <PackageX size={16} /> : <AlertTriangle size={16} />}<span>{statusLabel}</span><ChevronDown size={14} /></button>
+
+                {expanded && <div className="workflow-item-details fast-row-details">
+                  {product?.imageDataUrl && <img src={product.imageDataUrl} alt={name} />}
+                  <div><span><small>מק״ט</small><b>{item.sku || product?.sku || '—'}</b></span><span><small>Адрес</small><b>{product?.location || itemAddress(item)}</b></span><span><small>В коробке</small><b>{product?.unitsPerBox || item.unitsPerBox || '—'} шт.</b></span><span><small>Коробка</small><b>{formatPhysicalSpec(product?.boxSpec)}</b></span><span><small>Единица</small><b>{formatPhysicalSpec(product?.itemSpec)}</b></span><span><small>Проверка</small><b>{verification === 'verified' ? 'Товар проверен' : 'Нужна проверка карточки'}</b></span></div>
+                  {product?.description && <p>{product.description}</p>}
+                  {!product && <p>Подробные технические данные появятся после привязки позиции к общей базе товаров.</p>}
+                </div>}
+
+                {actionOpen && <div className="fast-row-actions">
+                  <span>Статус позиции</span>
+                  <button type="button" className="checking-button" disabled={!canHandle} aria-pressed={status === 'checking'} onClick={() => void setFastItemStatus(item.row, 'checking')}><ShieldCheck size={16} />На проверку</button>
+                  <button type="button" className="missing-button" disabled={!canHandle} aria-pressed={status === 'missing'} onClick={() => void setFastItemStatus(item.row, 'missing')}><PackageX size={16} />Нет товара</button>
+                  <button type="button" className="pick-button" disabled={!canHandle} aria-pressed={status === 'picked'} onClick={() => void setFastItemStatus(item.row, 'picked')}><PackageCheck size={16} />Собрано отдельно</button>
+                  {status !== 'pending' && <button type="button" className="reset-button" disabled={!canHandle} onClick={() => void setFastItemStatus(item.row, 'pending')}><Undo2 size={16} />Сбросить</button>}
+                  <button type="button" className="close-button" aria-label="Закрыть выбор статуса" onClick={() => setFastActionRow(null)}><X size={17} /></button>
+                </div>}
+              </article>
+            </Fragment>
+          }) : <div className="fast-picking-empty"><Search size={25} /><b>В этом фильтре нет позиций</b><button type="button" onClick={() => setFastFilter('all')}>Показать весь заказ</button></div>}
+        </div>
+
+        {session?.status === 'in-progress' && <footer className="fast-complete-bar"><div><b>{fastPendingCount ? `${fastPendingCount} позиций без замечаний` : 'Все позиции отмечены'}</b><span>{progress.checking ? `Нужно завершить проверку: ${progress.checking}` : fastPendingCount ? 'При завершении они будут записаны как собранные.' : 'Заказ готов к завершению.'}</span></div><button className="primary-button" type="button" disabled={isSaving || progress.checking > 0} onClick={() => void finishOrder()}><Flag size={18} />Завершить заказ</button></footer>}
+      </section>}
+
+      {workflowMode === 'route' && route?.routeWarning && <div className="optimization-warning workflow-route-warning"><AlertTriangle size={17} /><span>{route.routeWarning} Ручные точки остаются в списке.</span></div>}
+
+      {workflowMode === 'route' && <section className="workflow-timeline" aria-label="Остановки маршрута">
         {route?.stops.map((stop, index) => {
           const stopProgress = session?.stops[stop.address]
           const stopStatus = stopProgress?.status ?? 'pending'
@@ -643,7 +772,7 @@ export function OrderWorkflow() {
             </article>
           )
         })}
-      </section>
+      </section>}
     </div>
   )
 }
