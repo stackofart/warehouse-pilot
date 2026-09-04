@@ -27,7 +27,7 @@ import {
   Undo2,
   X,
 } from 'lucide-react'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { listOrders, type SavedOrder } from '../orders/storage'
 import { isProductVerified, listProducts, type Product } from '../products/storage'
 import type { RecognizedOrderItem } from '../recognition/ocr'
@@ -272,6 +272,8 @@ export function OrderWorkflow() {
   const [reportDrafts, setReportDrafts] = useState<Record<number, string>>({})
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSessionLoading, setIsSessionLoading] = useState(true)
@@ -296,6 +298,7 @@ export function OrderWorkflow() {
     let cancelled = false
     setExpandedRows(new Set())
     setSearchQuery('')
+    setSearchOpen(false)
     setHighlightedRow(null)
     setFastActionRow(null)
     setReportDrafts({})
@@ -531,7 +534,16 @@ export function OrderWorkflow() {
     setHighlightedRow(entry.row)
     setFastFilter('all')
     setSearchQuery('')
+    setSearchOpen(false)
     window.setTimeout(() => scrollToItem(entry.row), 0)
+  }
+
+  const toggleSearch = () => {
+    setSearchOpen((current) => {
+      const next = !current
+      if (next) window.setTimeout(() => searchInputRef.current?.focus(), 0)
+      return next
+    })
   }
 
   const searchStatusLabel = (status: FulfillmentItemStatus) => {
@@ -564,7 +576,7 @@ export function OrderWorkflow() {
         <p>{workflowMode === 'fast' ? 'Основной сценарий для телефона: полный список остаётся на месте, фиксируются только проблемы.' : 'Экспериментальный старый сценарий с остановками, расстояниями и картой маршрута.'}</p>
       </section>
 
-      <section className="workflow-overview">
+      <section className={`workflow-overview ${workflowMode === 'fast' && session ? 'mobile-fast-overview' : ''}`}>
         <div className="workflow-order-title"><span className={`workflow-status ${session?.status ?? 'not-started'}`}>{session?.status === 'completed' ? 'Завершён' : session?.status === 'paused' ? 'На паузе' : session ? 'В работе' : 'Не начат'}</span><h2>{order.orderNumber || 'Заказ без номера'}</h2><p>{order.items.length} позиций в заказе</p></div>
         <div className="workflow-stat"><Clock3 size={17} /><span><small>Начало</small><strong>{formatTime(session?.startedAt)}</strong></span></div>
         <div className="workflow-stat"><Timer size={17} /><span><small>Активное время</small><strong>{session ? formatMilliseconds(getFulfillmentActiveDuration(session, now)) : '0 мин 00 сек'}</strong></span></div>
@@ -584,6 +596,11 @@ export function OrderWorkflow() {
           </div>
         )}
       </section>
+
+      {workflowMode === 'fast' && session && <section className={`mobile-fast-summary ${session.status}`}>
+        <div><small>{order.orderNumber || 'Заказ без номера'}</small><b>{order.items.length} позиций · {progress.picked} собрано · {progress.checking + progress.missing} требуют проверки</b></div>
+        {session.status !== 'completed' && <button type="button" disabled={isSaving} aria-label={session.status === 'paused' ? 'Продолжить заказ' : 'Поставить заказ на паузу'} onClick={() => void toggleOrderPause()}>{session.status === 'paused' ? <Play size={18} /> : <Pause size={18} />}</button>}
+      </section>}
 
       {workflowMode === 'route' && session && session.status !== 'completed' && (
         <section className={`workflow-location-bar ${session.status}`}>
@@ -623,15 +640,18 @@ export function OrderWorkflow() {
 
       {order.notes && <section className="workflow-order-notes"><b>Примечание к заказу</b><p>{order.notes}</p></section>}
 
-      <section className="workflow-progress-card">
+      <section className={`workflow-progress-card ${workflowMode === 'fast' ? 'fast-mode' : ''}`}>
         <div><span><b>{progress.handled}</b> из {order.items.length} позиций</span><strong>{session ? progress.percent : 0}%</strong></div>
         <div className="workflow-progress-track"><span style={{ width: `${session ? progress.percent : 0}%` }} /></div>
         <ul><li className="picked"><Check size={12} />Собрано: {progress.picked}</li><li className="checking"><ShieldCheck size={12} />Проверяется: {progress.checking}</li><li className="missing"><PackageX size={12} />Отсутствует: {progress.missing}</li><li>Осталось: {session ? progress.pending : order.items.length}</li></ul>
-        <form className="workflow-item-search" role="search" onSubmit={(event) => { event.preventDefault(); if (searchResults[0]) goToSearchResult(searchResults[0]) }}>
+        <form className={`workflow-item-search ${searchOpen ? 'open' : ''}`} role="search" onSubmit={(event) => { event.preventDefault(); if (searchResults[0]) goToSearchResult(searchResults[0]) }}>
+          <button className="workflow-search-toggle" type="button" aria-expanded={searchOpen} onClick={toggleSearch}><Search size={18} /><span>Найти товар в заказе</span><ChevronDown size={16} /></button>
+          <div className="workflow-search-expand">
           <label htmlFor="workflow-product-search">Быстрый переход к товару</label>
           <div className="workflow-search-control">
             <Search size={18} />
             <input
+              ref={searchInputRef}
               id="workflow-product-search"
               type="search"
               inputMode="search"
@@ -660,6 +680,7 @@ export function OrderWorkflow() {
               {searchResults.length > visibleSearchResults.length && <p>Показаны первые {visibleSearchResults.length} результатов — уточните запрос.</p>}
             </div>
           )}
+          </div>
         </form>
       </section>
 
@@ -693,11 +714,11 @@ export function OrderWorkflow() {
                   <span className="fast-row-meta"><strong><MapPin size={13} />{product?.location || itemAddress(item)}</strong><em className="fast-row-quantity"><b>{item.quantity || '?'}</b> шт. · {item.boxCount || '?'} кор.</em><small className="fast-row-barcode"><Barcode size={13} />{item.barcode || product?.barcode || 'без штрихкода'}</small></span>
                   {itemNote && <span className="fast-row-report-note"><MessageSquare size={13} />{itemNote}</span>}
                 </button>
-                <button className={`fast-row-status ${status}`} type="button" disabled={!canHandle} aria-expanded={actionOpen} onClick={() => setFastActionRow((current) => current === item.row ? null : item.row)}>{status === 'picked' ? <Check size={16} /> : status === 'checking' ? <ShieldCheck size={16} /> : status === 'missing' ? <PackageX size={16} /> : <AlertTriangle size={16} />}<span>{statusLabel}</span><ChevronDown size={14} /></button>
+                <button className={`fast-row-status ${status}`} type="button" title={statusLabel} aria-label={`${statusLabel}: ${name}`} disabled={!canHandle} aria-expanded={actionOpen} onClick={() => setFastActionRow((current) => current === item.row ? null : item.row)}>{status === 'picked' ? <Check size={16} /> : status === 'checking' ? <ShieldCheck size={16} /> : status === 'missing' ? <PackageX size={16} /> : <AlertTriangle size={16} />}<span>{statusLabel}</span><ChevronDown size={14} /></button>
 
                 {expanded && <div className="workflow-item-details fast-row-details">
                   {product?.imageDataUrl && <img src={product.imageDataUrl} alt={name} />}
-                  <div><span><small>מק״ט</small><b>{item.sku || product?.sku || '—'}</b></span><span><small>Адрес</small><b>{product?.location || itemAddress(item)}</b></span><span><small>В коробке</small><b>{product?.unitsPerBox || item.unitsPerBox || '—'} шт.</b></span><span><small>Коробка</small><b>{formatPhysicalSpec(product?.boxSpec)}</b></span><span><small>Единица</small><b>{formatPhysicalSpec(product?.itemSpec)}</b></span><span><small>Проверка</small><b>{verification === 'verified' ? 'Товар проверен' : 'Нужна проверка карточки'}</b></span></div>
+                  <div><span><small>Штрихкод</small><b>{item.barcode || product?.barcode || '—'}</b></span><span><small>מק״ט</small><b>{item.sku || product?.sku || '—'}</b></span><span><small>Адрес</small><b>{product?.location || itemAddress(item)}</b></span><span><small>В коробке</small><b>{product?.unitsPerBox || item.unitsPerBox || '—'} шт.</b></span><span><small>Коробка</small><b>{formatPhysicalSpec(product?.boxSpec)}</b></span><span><small>Единица</small><b>{formatPhysicalSpec(product?.itemSpec)}</b></span><span><small>Проверка</small><b>{verification === 'verified' ? 'Товар проверен' : 'Нужна проверка карточки'}</b></span></div>
                   {product?.description && <p>{product.description}</p>}
                   {!product && <p>Подробные технические данные появятся после привязки позиции к общей базе товаров.</p>}
                 </div>}

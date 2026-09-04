@@ -494,6 +494,7 @@
 .workflow-mode-switch button.active { border-color: #8dc5b0; color: #176f52; background: #e9f6f0; box-shadow: 0 0 0 2px rgba(38,135,99,.07); }
 .workflow-mode-switch p { margin: 0; color: #75867e; font-size: 12px; line-height: 1.45; text-align: right; }
 .workflow-overview { min-height: 104px; padding: 16px 18px; display: grid; grid-template-columns: minmax(190px,1.4fr) repeat(3,minmax(95px,.65fr)) auto; align-items: center; gap: 16px; border: 1px solid var(--line); border-radius: 13px; background: white; box-shadow: 0 7px 22px rgba(21,57,44,.035); }
+.mobile-fast-summary { display: none; }
 .workflow-order-title h2 { margin: 6px 0 3px; color: #263a31; font-size: 18px; }
 .workflow-order-title p { margin: 0; color: #829089; font-size: 12px; }
 .workflow-status { display: inline-flex; padding: 4px 7px; border-radius: 20px; color: #73817b; background: #edf1ef; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
@@ -579,6 +580,8 @@
 .workflow-progress-card li.checking { color: #9a6b22; }
 .workflow-progress-card li.missing { color: #a45151; }
 .workflow-item-search { position: relative; margin-top: 12px; padding-top: 11px; border-top: 1px solid #e5ece9; }
+.workflow-search-toggle { display: none; }
+.workflow-search-expand { display: block; }
 .workflow-item-search > label { display: block; margin: 0 0 6px 1px; color: #667970; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .35px; }
 .workflow-search-control { min-height: 42px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border: 1px solid #cfdcd6; border-radius: 9px; color: #4f7e6b; background: #fbfdfc; }
 .workflow-search-control:focus-within { border-color: #5aa88c; box-shadow: 0 0 0 3px rgba(15,118,87,.1); background: white; }
@@ -1740,43 +1743,68 @@
 }
 
 @media (max-width: 720px) {
-  .workflow-mode-switch { align-items: stretch; flex-direction: column; gap: 8px; }
+  .workflow-heading { margin-bottom: 11px; align-items: center; }
+  .workflow-heading .eyebrow, .workflow-heading > div > p:last-child { display: none; }
+  .workflow-heading h1 { font-size: 21px; letter-spacing: -.6px; }
+  .workflow-heading .order-selector { min-width: 128px; padding: 6px 8px; }
+  .workflow-order-navigation { margin-bottom: 8px; }
+  .workflow-mode-switch { margin-bottom: 8px; padding: 6px; align-items: stretch; flex-direction: column; gap: 0; }
   .workflow-mode-switch > div { display: grid; grid-template-columns: 1fr 1fr; }
-  .workflow-mode-switch button { justify-content: center; }
-  .workflow-mode-switch p { text-align: left; }
-  .fast-picking-panel { width: calc(100% + 30px); margin: 12px -15px 112px; border-right: 0; border-left: 0; border-radius: 0; }
-  .fast-picking-toolbar { align-items: stretch; flex-direction: column; }
-  .fast-filter-tabs { width: 100%; }
-  .fast-filter-tabs button { min-height: 40px; }
-  .fast-sort-select { width: 100%; flex-basis: auto; }
-  .fast-sort-select select { height: 40px; font-size: 14px; }
-  .fast-pick-row { min-height: 73px; padding: 11px 12px; grid-template-columns: 29px minmax(0,1fr); align-items: start; gap: 8px 9px; }
-  .fast-row-main > b { font-size: 16px; line-height: 1.42; }
-  .fast-row-main > span { gap: 6px 9px; font-size: 12px; }
-  .fast-row-main > span strong { font-size: 14px; }
-  .fast-row-quantity { font-size: 13px; }
-  .fast-row-quantity b { font-size: 18px; }
-  .fast-row-barcode { flex-basis: 100%; font-size: 14px; }
-  .fast-row-status { min-height: 44px; width: 100%; padding: 0 10px; grid-column: 1 / -1; grid-template-columns: 19px minmax(0,1fr) 15px; gap: 6px; font-size: 13px; }
+  .workflow-mode-switch button { min-height: 34px; justify-content: center; }
+  .workflow-mode-switch p { display: none; }
+  .workflow-overview.mobile-fast-overview { display: none; }
+  .mobile-fast-summary { min-height: 50px; margin-bottom: 7px; padding: 7px 9px 7px 12px; display: flex; align-items: center; justify-content: space-between; gap: 9px; border: 1px solid #d8e5df; border-radius: 9px; background: white; }
+  .mobile-fast-summary small, .mobile-fast-summary b { display: block; }
+  .mobile-fast-summary small { margin-bottom: 2px; color: #72847b; font-size: 10px; font-weight: 800; }
+  .mobile-fast-summary b { color: #31483e; font-size: 12px; line-height: 1.35; }
+  .mobile-fast-summary.checking, .mobile-fast-summary.paused { border-color: #e7d2a5; background: #fffaf0; }
+  .mobile-fast-summary > button { width: 37px; height: 37px; display: grid; place-items: center; flex: 0 0 37px; border: 1px solid #d5e1dc; border-radius: 8px; color: #39745e; background: #f4f9f7; }
+  .workflow-progress-card.fast-mode { margin-top: 0; padding: 0; border: 0; background: transparent; }
+  .workflow-progress-card.fast-mode > div:first-child, .workflow-progress-card.fast-mode > .workflow-progress-track, .workflow-progress-card.fast-mode > ul { display: none; }
+  .workflow-progress-card.fast-mode .workflow-item-search { margin: 0; padding: 0; border: 0; }
+  .workflow-search-toggle { width: 100%; min-height: 39px; padding: 0 11px; display: grid; grid-template-columns: 20px minmax(0,1fr) 17px; align-items: center; gap: 7px; border: 1px solid #d9e4df; border-radius: 8px; color: #46675a; background: white; font-size: 12px; font-weight: 850; text-align: left; }
+  .workflow-search-toggle svg:last-child { transition: transform .15s ease; }
+  .workflow-item-search.open .workflow-search-toggle svg:last-child { transform: rotate(180deg); }
+  .workflow-item-search .workflow-search-expand { display: none; padding-top: 7px; }
+  .workflow-item-search.open .workflow-search-expand { display: block; }
+  .workflow-item-search.open .workflow-search-expand > label { display: none; }
+  .workflow-search-results { top: calc(100% + 5px); }
+  .fast-picking-panel { width: calc(100% + 30px); margin: 8px -15px 74px; border-right: 0; border-left: 0; border-radius: 0; }
+  .fast-picking-toolbar { min-height: 48px; padding: 6px 8px; align-items: center; flex-direction: row; gap: 7px; }
+  .fast-filter-tabs { width: auto; flex: 1 1 auto; }
+  .fast-filter-tabs button { min-height: 34px; padding: 0 8px; }
+  .fast-sort-select { width: 112px; flex: 0 0 112px; }
+  .fast-sort-select span { display: none; }
+  .fast-sort-select select { height: 34px; padding: 0 5px; font-size: 11px; }
+  .fast-pick-row { min-height: 61px; padding: 7px 8px; grid-template-columns: 27px minmax(0,1fr) 40px; align-items: center; gap: 5px 7px; }
+  .fast-row-main { padding: 1px 0; }
+  .fast-row-main > b { font-size: 14px; line-height: 1.3; }
+  .fast-row-main > span { margin-top: 3px; gap: 4px 8px; font-size: 11px; }
+  .fast-row-main > span strong { font-size: 12px; }
+  .fast-row-quantity { padding: 2px 5px; font-size: 11px; }
+  .fast-row-quantity b { font-size: 15px; }
+  .fast-row-barcode { display: none !important; }
+  .fast-row-status { width: 40px; min-height: 40px; height: 40px; padding: 0; grid-column: 3; grid-row: 1; grid-template-columns: 1fr; place-items: center; gap: 0; border-radius: 9px; }
+  .fast-row-status > span, .fast-row-status > svg:last-child { display: none; }
   .fast-row-details, .fast-row-actions { grid-column: 1 / -1; }
   .fast-row-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .fast-row-actions > span { grid-column: 1 / -1; }
   .fast-row-actions button { min-height: 43px; font-size: 12px; }
   .fast-row-actions .fast-report-comment { grid-column: 1 / -1; }
   .fast-row-actions .close-button { position: absolute; right: 13px; width: 36px; min-height: 34px; }
-  .fast-complete-bar { bottom: 76px; margin: 9px; padding: 9px; }
+  .fast-complete-bar { min-height: 49px; bottom: 70px; margin: 5px; padding: 5px 6px 5px 10px; border-radius: 9px; }
   .nav-drawer .fast-complete-bar { bottom: 12px; }
-  .fast-complete-bar b { font-size: 12px; }
-  .fast-complete-bar span { max-width: 190px; font-size: 10px; }
-  .fast-complete-bar .primary-button { min-height: 46px; padding: 0 11px; font-size: 12px; }
+  .fast-complete-bar b { font-size: 11px; }
+  .fast-complete-bar span { display: none; }
+  .fast-complete-bar .primary-button { min-height: 39px; padding: 0 10px; font-size: 11px; }
 }
 
 @media (max-width: 430px) {
   .fast-filter-tabs button { padding: 0 8px; }
-  .fast-pick-row { grid-template-columns: 27px minmax(0,1fr); }
+  .fast-pick-row { grid-template-columns: 25px minmax(0,1fr) 38px; }
   .fast-row-number { width: 25px; height: 25px; }
   .fast-row-main > span { display: flex; }
   .fast-family-heading small { display: none; }
   .fast-complete-bar > div { min-width: 0; }
-  .fast-complete-bar span { max-width: 150px; }
+  .fast-complete-bar .primary-button { padding: 0 8px; }
 }
