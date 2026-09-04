@@ -3,6 +3,7 @@ export type FulfillmentItemStatus = 'pending' | 'checking' | 'picked' | 'missing
 export type FulfillmentItemProgress = {
   status: FulfillmentItemStatus
   updatedAt: string | null
+  note?: string
 }
 
 export type FulfillmentStopStatus = 'pending' | 'arrived' | 'collecting' | 'completed'
@@ -25,6 +26,7 @@ export type FulfillmentEventType =
   | 'stop_collecting_started'
   | 'stop_completed'
   | 'item_status_changed'
+  | 'item_note_changed'
   | 'items_bulk_picked'
   | 'order_paused'
   | 'order_resumed'
@@ -41,6 +43,7 @@ export type FulfillmentEvent = {
   rows?: number[]
   previousItemStatus?: FulfillmentItemStatus
   itemStatus?: FulfillmentItemStatus
+  note?: string
   distanceMeters?: number | null
 }
 
@@ -150,7 +153,12 @@ export function updateFulfillmentItem(session: FulfillmentSession, row: number, 
   return {
     ...session,
     updatedAt: now,
-    items: { ...session.items, [key]: { status, updatedAt: status === 'pending' ? null : now } },
+    items: {
+      ...session.items,
+      [key]: status === 'pending'
+        ? { status, updatedAt: null }
+        : { ...session.items[key], status, updatedAt: now },
+    },
     events: withEvent(session, {
       type: 'item_status_changed',
       at: now,
@@ -158,6 +166,21 @@ export function updateFulfillmentItem(session: FulfillmentSession, row: number, 
       previousItemStatus: session.items[key].status,
       itemStatus: status,
     }),
+  }
+}
+
+export function updateFulfillmentItemNote(session: FulfillmentSession, row: number, rawNote: string, now = new Date().toISOString()): FulfillmentSession {
+  const key = String(row)
+  if (!(key in session.items)) throw new Error(`Строка ${row} отсутствует в сессии заказа`)
+  assertSessionIsActive(session)
+  const note = rawNote.trim().slice(0, 500)
+  const previous = session.items[key]
+  const status = note ? 'checking' : previous.status === 'checking' ? 'pending' : previous.status
+  return {
+    ...session,
+    updatedAt: now,
+    items: { ...session.items, [key]: { ...previous, status, note: note || undefined, updatedAt: status === 'pending' ? null : now } },
+    events: withEvent(session, { type: 'item_note_changed', at: now, row, itemStatus: status, note }),
   }
 }
 

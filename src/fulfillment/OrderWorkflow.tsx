@@ -14,6 +14,7 @@ import {
   Flag,
   Info,
   MapPin,
+  MessageSquare,
   Navigation,
   PackageCheck,
   PackageX,
@@ -45,6 +46,7 @@ import {
   reconcileFulfillmentSession,
   resumeFulfillmentSession,
   updateFulfillmentItem,
+  updateFulfillmentItemNote,
   updateFulfillmentItemAtStop,
   updateFulfillmentFinish,
   updateFulfillmentLocation,
@@ -267,6 +269,7 @@ export function OrderWorkflow() {
   const [fastFilter, setFastFilter] = useState<FastFilter>('all')
   const [fastSort, setFastSort] = useState<FastSort>('sheet')
   const [fastActionRow, setFastActionRow] = useState<number | null>(null)
+  const [reportDrafts, setReportDrafts] = useState<Record<number, string>>({})
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null)
@@ -295,6 +298,7 @@ export function OrderWorkflow() {
     setSearchQuery('')
     setHighlightedRow(null)
     setFastActionRow(null)
+    setReportDrafts({})
     setFastFilter('all')
     if (!order) {
       setSession(null)
@@ -466,6 +470,18 @@ export function OrderWorkflow() {
     const currentStatus = session.items[String(row)]?.status ?? 'pending'
     const nextStatus = currentStatus === status ? 'pending' : status
     await persistSession(updateFulfillmentItem(session, row, nextStatus), session, 'Не удалось сохранить отметку позиции')
+    setFastActionRow(null)
+  }
+
+  const saveFastItemComment = async (row: number) => {
+    if (!session || session.status !== 'in-progress') return
+    const note = (reportDrafts[row] ?? session.items[String(row)]?.note ?? '').trim()
+    if (!note) {
+      setError('Напишите комментарий к позиции')
+      return
+    }
+    setError('')
+    await persistSession(updateFulfillmentItemNote(session, row, note), session, 'Не удалось сохранить комментарий')
     setFastActionRow(null)
   }
 
@@ -665,7 +681,8 @@ export function OrderWorkflow() {
             const actionOpen = fastActionRow === item.row
             const canHandle = Boolean(session) && session!.status === 'in-progress' && !isSaving
             const verification = item.productVerification ?? (product && isProductVerified(product) ? 'verified' : 'unverified')
-            const statusLabel = status === 'picked' ? 'Собрано' : status === 'checking' ? 'Проверка' : status === 'missing' ? 'Нет товара' : 'Проблема'
+            const statusLabel = status === 'picked' ? 'Собрано' : status === 'checking' ? 'Сообщено' : status === 'missing' ? 'Нет товара' : 'Сообщить'
+            const itemNote = session?.items[String(item.row)]?.note ?? ''
             const showFamily = fastSort === 'family' && (index === 0 || fastItems[index - 1].family.key !== family.key)
             return <Fragment key={item.row}>
               {showFamily && <div className="fast-family-heading"><span>{family.label}</span><small>одинаковый бренд или форм-фактор</small></div>}
@@ -673,7 +690,8 @@ export function OrderWorkflow() {
                 <span className="fast-row-number">{item.row}</span>
                 <button className="fast-row-main" type="button" aria-expanded={expanded} onClick={() => toggleRowDetails(item.row)}>
                   <b dir="auto">{name}</b>
-                  <span><strong><MapPin size={12} />{product?.location || itemAddress(item)}</strong><em>{item.boxCount || '?'} кор. · {item.quantity || '?'} шт.</em><small>{item.barcode || product?.barcode || 'без штрихкода'}</small></span>
+                  <span className="fast-row-meta"><strong><MapPin size={13} />{product?.location || itemAddress(item)}</strong><em className="fast-row-quantity"><b>{item.quantity || '?'}</b> шт. · {item.boxCount || '?'} кор.</em><small className="fast-row-barcode"><Barcode size={13} />{item.barcode || product?.barcode || 'без штрихкода'}</small></span>
+                  {itemNote && <span className="fast-row-report-note"><MessageSquare size={13} />{itemNote}</span>}
                 </button>
                 <button className={`fast-row-status ${status}`} type="button" disabled={!canHandle} aria-expanded={actionOpen} onClick={() => setFastActionRow((current) => current === item.row ? null : item.row)}>{status === 'picked' ? <Check size={16} /> : status === 'checking' ? <ShieldCheck size={16} /> : status === 'missing' ? <PackageX size={16} /> : <AlertTriangle size={16} />}<span>{statusLabel}</span><ChevronDown size={14} /></button>
 
@@ -685,10 +703,10 @@ export function OrderWorkflow() {
                 </div>}
 
                 {actionOpen && <div className="fast-row-actions">
-                  <span>Статус позиции</span>
-                  <button type="button" className="checking-button" disabled={!canHandle} aria-pressed={status === 'checking'} onClick={() => void setFastItemStatus(item.row, 'checking')}><ShieldCheck size={16} />На проверку</button>
-                  <button type="button" className="missing-button" disabled={!canHandle} aria-pressed={status === 'missing'} onClick={() => void setFastItemStatus(item.row, 'missing')}><PackageX size={16} />Нет товара</button>
-                  <button type="button" className="pick-button" disabled={!canHandle} aria-pressed={status === 'picked'} onClick={() => void setFastItemStatus(item.row, 'picked')}><PackageCheck size={16} />Собрано отдельно</button>
+                  <span>Сообщить о позиции</span>
+                  <button type="button" className="missing-button" disabled={!canHandle} aria-pressed={status === 'missing'} onClick={() => void setFastItemStatus(item.row, 'missing')}><PackageX size={16} />Товар отсутствует</button>
+                  <label className="fast-report-comment"><span>Комментарий</span><textarea value={reportDrafts[item.row] ?? itemNote} maxLength={500} placeholder="Например: упаковка повреждена или товар на другой позиции" onChange={(event) => setReportDrafts((current) => ({ ...current, [item.row]: event.target.value }))} /></label>
+                  <button type="button" className="checking-button" disabled={!canHandle || !(reportDrafts[item.row] ?? itemNote).trim()} onClick={() => void saveFastItemComment(item.row)}><MessageSquare size={16} />Сохранить комментарий</button>
                   {status !== 'pending' && <button type="button" className="reset-button" disabled={!canHandle} onClick={() => void setFastItemStatus(item.row, 'pending')}><Undo2 size={16} />Сбросить</button>}
                   <button type="button" className="close-button" aria-label="Закрыть выбор статуса" onClick={() => setFastActionRow(null)}><X size={17} /></button>
                 </div>}

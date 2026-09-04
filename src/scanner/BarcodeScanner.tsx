@@ -54,7 +54,12 @@ function formatScanTime(value: string) {
   }).format(new Date(value))
 }
 
-export function BarcodeScanner() {
+type BarcodeScannerProps = {
+  embedded?: boolean
+  onBarcode?: (barcode: string) => void
+}
+
+export function BarcodeScanner({ embedded = false, onBarcode }: BarcodeScannerProps = {}) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -113,6 +118,8 @@ export function BarcodeScanner() {
       setStatusText('Код найден — проверьте товар')
     }
     navigator.vibrate?.(100)
+    onBarcode?.(barcode)
+    if (onBarcode) return
     void matchSharedProducts([{ barcode }]).then((matches) => {
       const product = findProductByBarcode(matches, barcode)
       setResult((current) => current?.id === entry.id ? { ...current, product, catalogState: 'ready' } : current)
@@ -277,7 +284,7 @@ export function BarcodeScanner() {
   }
 
   return (
-    <div className="page scanner-page">
+    <div className={`page scanner-page ${embedded ? 'embedded' : ''}`}>
       <div className="page-heading scanner-heading">
         <div>
           <p className="eyebrow">СКАНЕР И ОБЩАЯ БАЗА</p>

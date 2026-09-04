@@ -9,13 +9,12 @@ import {
   FileSearch,
   HelpCircle,
   LayoutDashboard,
-  Map,
+  Menu,
   MapPinned,
   PackageOpen,
   RefreshCw,
   Route,
   Save,
-  ScanBarcode,
   ScanLine,
   Settings,
   ShieldCheck,
@@ -37,24 +36,34 @@ import { listProducts } from './products/storage'
 import { reconcileRecognizedItems } from './products/reconciliation'
 import { matchSharedProducts } from './products/sharedApi'
 import { OrderWorkflow } from './fulfillment/OrderWorkflow'
-import { WarehouseMap } from './warehouse/WarehouseMap'
 import { OverviewDashboard } from './overview/OverviewDashboard'
-import { BarcodeScanner } from './scanner/BarcodeScanner'
 import { AdminWorkspace } from './admin/AdminWorkspace'
 import { loadSession, type AuthenticatedUser } from './auth/session'
 import { UserProfile } from './auth/UserProfile'
+import { PickerSettings, type MobileNavigationMode } from './settings/PickerSettings'
 import './App.css'
 
 type OcrState = 'idle' | 'ready' | 'working' | 'success' | 'error'
 type RecognitionMode = 'openai' | 'local'
-type AppSection = 'overview' | 'new-order' | 'scanner' | 'orders' | 'products' | 'warehouse' | 'workflow' | 'pallet'
+type AppSection = 'overview' | 'new-order' | 'orders' | 'products' | 'workflow' | 'pallet' | 'settings'
+
+const MOBILE_NAVIGATION_KEY = 'warehouse-pilot.mobile-navigation'
+
+function initialMobileNavigationMode(): MobileNavigationMode {
+  try {
+    return window.localStorage.getItem(MOBILE_NAVIGATION_KEY) === 'drawer' ? 'drawer' : 'bottom'
+  } catch {
+    return 'bottom'
+  }
+}
 
 function sectionFromHash(): AppSection {
   if (window.location.hash === '#overview') return 'overview'
-  if (window.location.hash === '#scanner') return 'scanner'
+  if (window.location.hash === '#scanner') return 'products'
   if (window.location.hash === '#products') return 'products'
   if (window.location.hash === '#orders') return 'orders'
-  if (window.location.hash === '#warehouse') return 'warehouse'
+  if (window.location.hash === '#warehouse') return 'overview'
+  if (window.location.hash === '#settings') return 'settings'
   if (window.location.hash === '#pallet' || window.location.hash.startsWith('#pallet/')) return 'pallet'
   if (window.location.hash.startsWith('#work/')) return 'workflow'
   if (window.location.hash.startsWith('#route/')) return 'workflow'
@@ -115,6 +124,8 @@ function App() {
   const [sessionUser, setSessionUser] = useState<AuthenticatedUser | null>(null)
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [sessionError, setSessionError] = useState('')
+  const [mobileNavigationMode, setMobileNavigationMode] = useState<MobileNavigationMode>(initialMobileNavigationMode)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -125,10 +136,16 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const updateSection = () => setActiveSection(sectionFromHash())
+    const updateSection = () => { setActiveSection(sectionFromHash()); setMobileMenuOpen(false) }
     window.addEventListener('hashchange', updateSection)
     return () => window.removeEventListener('hashchange', updateSection)
   }, [])
+
+  const changeMobileNavigationMode = (mode: MobileNavigationMode) => {
+    setMobileNavigationMode(mode)
+    setMobileMenuOpen(false)
+    try { window.localStorage.setItem(MOBILE_NAVIGATION_KEY, mode) } catch { /* Private mode can disable storage. */ }
+  }
 
   useEffect(() => {
     listOrders().then((orders) => setOrderCount(orders.length)).catch(console.error)
@@ -330,7 +347,7 @@ function App() {
   if (sessionUser.role === 'admin') return <AdminWorkspace user={sessionUser} />
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell nav-${mobileNavigationMode}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Warehouse size={22} strokeWidth={2.2} /></div>
@@ -343,12 +360,10 @@ function App() {
         <nav className="main-nav" aria-label="Основная навигация">
           <a className={activeSection === 'overview' ? 'active' : ''} href="#overview"><LayoutDashboard size={19} />Обзор</a>
           <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={19} />Новый заказ</a>
-          <a className={activeSection === 'scanner' ? 'active' : ''} href="#scanner"><ScanBarcode size={19} />Сканер</a>
           <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><ClipboardList size={19} />Заказы{orderCount > 0 && <span className="nav-count">{orderCount}</span>}</a>
-          <a className={activeSection === 'warehouse' ? 'active' : ''} href="#warehouse"><Map size={19} />Карта склада</a>
           <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={19} />Паллета</a>
           <a className={activeSection === 'products' ? 'active' : ''} href="#products"><Boxes size={19} />Товары</a>
-          <a href="#settings"><Settings size={19} />Настройки</a>
+          <a className={activeSection === 'settings' ? 'active' : ''} href="#settings"><Settings size={19} />Настройки</a>
         </nav>
 
         <div className="sidebar-bottom">
@@ -363,11 +378,12 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
+          {mobileNavigationMode === 'drawer' && <button className="mobile-menu-trigger" type="button" aria-label="Открыть меню" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={22} /></button>}
           <div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div>
           <div className="worker-topbar-actions"><div className="shift-status"><span /> Смена активна <b>08:42</b></div><div className="worker-mobile-role"><UserProfile compact user={sessionUser} /></div></div>
         </header>
 
-        {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'scanner' ? <BarcodeScanner /> : activeSection === 'products' ? <CatalogSearch /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
+        {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'products' ? <CatalogSearch /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : activeSection === 'settings' ? <PickerSettings navigationMode={mobileNavigationMode} onNavigationModeChange={changeMobileNavigationMode} /> : <div className="page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">НОВЫЙ ЗАКАЗ</p>
@@ -562,15 +578,26 @@ function App() {
         </div>}
       </main>
 
-      <nav className="mobile-bottom-nav" aria-label="Мобильная навигация">
+      {mobileNavigationMode === 'drawer' && <div className={`mobile-navigation-drawer ${mobileMenuOpen ? 'open' : ''}`} aria-hidden={!mobileMenuOpen}>
+        <button className="mobile-drawer-backdrop" type="button" aria-label="Закрыть меню" onClick={() => setMobileMenuOpen(false)} />
+        <aside><header><div className="brand-mark"><Warehouse size={20} /></div><div><b>Warehouse Pilot</b><span>Меню комплектовщика</span></div><button type="button" aria-label="Закрыть меню" onClick={() => setMobileMenuOpen(false)}>×</button></header><nav aria-label="Мобильное боковое меню">
+          <a className={activeSection === 'overview' ? 'active' : ''} href="#overview"><LayoutDashboard size={20} />Обзор</a>
+          <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={20} />Новый заказ</a>
+          <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><ClipboardList size={20} />Заказы{orderCount > 0 && <span>{orderCount}</span>}</a>
+          <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={20} />Паллета</a>
+          <a className={activeSection === 'products' ? 'active' : ''} href="#products"><Boxes size={20} />Товары</a>
+          <a className={activeSection === 'settings' ? 'active' : ''} href="#settings"><Settings size={20} />Настройки</a>
+        </nav></aside>
+      </div>}
+
+      {mobileNavigationMode === 'bottom' && <nav className="mobile-bottom-nav picker-mobile-nav" aria-label="Мобильная навигация">
         <a className={activeSection === 'overview' ? 'active' : ''} href="#overview"><LayoutDashboard size={21} /><span>Обзор</span></a>
         <a className={activeSection === 'new-order' ? 'active' : ''} href="#new-order"><ScanLine size={21} /><span>Новый</span></a>
-        <a className={`scanner-nav-link ${activeSection === 'scanner' ? 'active' : ''}`} href="#scanner"><ScanBarcode size={21} /><span>Сканер</span></a>
         <a className={activeSection === 'orders' || activeSection === 'workflow' ? 'active' : ''} href="#orders"><span className="mobile-nav-icon"><ClipboardList size={21} />{orderCount > 0 && <i>{orderCount}</i>}</span><span>Заказы</span></a>
-        <a className={activeSection === 'warehouse' ? 'active' : ''} href="#warehouse"><Map size={21} /><span>Карта</span></a>
         <a className={activeSection === 'pallet' ? 'active' : ''} href="#pallet"><Cuboid size={21} /><span>Паллета</span></a>
         <a className={activeSection === 'products' ? 'active' : ''} href="#products"><Boxes size={21} /><span>Товары</span></a>
-      </nav>
+        <a className={activeSection === 'settings' ? 'active' : ''} href="#settings"><Settings size={21} /><span>Настройки</span></a>
+      </nav>}
     </div>
   )
 }
