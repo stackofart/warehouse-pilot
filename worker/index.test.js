@@ -44,10 +44,33 @@ const researchedProduct = {
 
 afterEach(() => vi.unstubAllGlobals())
 
+function authenticatedContext(email = 'worker@example.com') {
+  return { access: { getIdentity: vi.fn(async () => ({ email, name: 'Warehouse User' })) } }
+}
+
+function authenticatedEnv(bindings = {}, role = 'admin', catalogRows = []) {
+  const user = { id: 'user-1', email: 'worker@example.com', display_name: 'Warehouse User', role, status: 'active' }
+  return {
+    ...bindings,
+    ASSETS: bindings.ASSETS || { fetch: vi.fn() },
+    DB: {
+      prepare: vi.fn((sql) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn(async () => sql.includes('FROM users') ? user : null),
+          all: vi.fn(async () => ({ results: catalogRows })),
+          run: vi.fn(async () => ({ success: true })),
+        })),
+        first: vi.fn(async () => null),
+        all: vi.fn(async () => ({ results: catalogRows })),
+      })),
+    },
+  }
+}
+
 describe('OpenAI recognition Worker', () => {
   it('requires a server-side API key', async () => {
     const request = new Request('https://warehouse.example/api/recognize-order', { method: 'POST' })
-    const response = await worker.fetch(request, { ASSETS: { fetch: vi.fn() } })
+    const response = await worker.fetch(request, authenticatedEnv(), authenticatedContext())
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toMatchObject({ code: 'openai_not_configured' })
@@ -75,10 +98,10 @@ describe('OpenAI recognition Worker', () => {
     formData.append('images', new Blob(['fake-jpeg'], { type: 'image/jpeg' }), 'order-1.jpg')
     formData.append('images', new Blob(['fake-jpeg-2'], { type: 'image/jpeg' }), 'order-2.jpg')
     const request = new Request('https://warehouse.example/api/recognize-order', { method: 'POST', body: formData })
-    const response = await worker.fetch(request, {
+    const response = await worker.fetch(request, authenticatedEnv({
       OPENAI_API_KEY: 'test-key',
       ASSETS: { fetch: vi.fn() },
-    })
+    }), authenticatedContext())
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
@@ -99,7 +122,7 @@ describe('OpenAI product research Worker', () => {
       body: JSON.stringify({ barcode: '12345678' }),
     })
 
-    const response = await worker.fetch(request, { OPENAI_API_KEY: 'test-key', ASSETS: { fetch: vi.fn() } })
+    const response = await worker.fetch(request, authenticatedEnv({ OPENAI_API_KEY: 'test-key' }), authenticatedContext())
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ code: 'invalid_barcode' })
@@ -149,7 +172,7 @@ describe('OpenAI product research Worker', () => {
       }),
     })
 
-    const response = await worker.fetch(request, { OPENAI_API_KEY: 'test-key', ASSETS: { fetch: vi.fn() } })
+    const response = await worker.fetch(request, authenticatedEnv({ OPENAI_API_KEY: 'test-key' }), authenticatedContext())
     const body = await response.json()
 
     expect(response.status).toBe(200)
@@ -158,5 +181,45 @@ describe('OpenAI product research Worker', () => {
     expect(body.unit.lengthCm.sourceUrls).toEqual(['https://manufacturer.example/product'])
     expect(body.sources).toEqual([{ url: 'https://manufacturer.example/product', title: 'Manufacturer product' }])
     expect(openAIFetch).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Worker authorization and catalog boundary', () => {
+  it('rejects an API call without a Cloudflare Access identity', async () => {
+    const request = new Request('https://warehouse.example/api/me')
+    const response = await worker.fetch(request, authenticatedEnv(), {})
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'authentication_required' })
+  })
+
+  it('requires JWT verification settings when Static Assets only forward the Access assertion', async () => {
+    const request = new Request('https://warehouse.example/api/me', { headers: { 'cf-access-jwt-assertion': 'signed-token' } })
+    const response = await worker.fetch(request, authenticatedEnv(), {})
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ code: 'access_verification_not_configured' })
+  })
+
+  it('returns the server-assigned picker role', async () => {
+    const request = new Request('https://warehouse.example/api/me')
+    const response = await worker.fetch(request, authenticatedEnv({}, 'picker'), authenticatedContext())
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ user: { role: 'picker', email: 'worker@example.com' } })
+  })
+
+  it('does not expose the administrative catalog or paid research to a picker', async () => {
+    const env = authenticatedEnv({ OPENAI_API_KEY: 'test-key' }, 'picker')
+    const context = authenticatedContext()
+    const catalog = await worker.fetch(new Request('https://warehouse.example/api/admin/products'), env, context)
+    const research = await worker.fetch(new Request('https://warehouse.example/api/research-product', { method: 'POST' }), env, context)
+    expect(catalog.status).toBe(403)
+    expect(research.status).toBe(403)
+  })
+
+  it('lets a picker search a bounded subset of the shared catalog', async () => {
+    const rows = [{ id: 'p1', sku: '1112', barcode: '7290121920100', name: 'Coffee', location: '24.F', units_per_box: 12, verification_status: 'verified', version: 1, updated_at: '2026-08-30' }]
+    const request = new Request('https://warehouse.example/api/catalog/search?q=coffee')
+    const response = await worker.fetch(request, authenticatedEnv({}, 'picker', rows), authenticatedContext())
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ items: [{ id: 'p1', location: '24.F' }], limit: 20 })
   })
 })

@@ -3,3 +3,14 @@
 OPENAI_API_KEY=replace_with_your_openai_api_key
 OPENAI_VISION_MODEL=gpt-5.6-luna
 OPENAI_PRODUCT_MODEL=gpt-5.6-terra
+
+# Local role simulation. The local user is created in D1 on the first API call.
+DEV_AUTH_EMAIL=admin@local.warehouse
+DEV_AUTH_ROLE=admin
+
+# Production only: exact Cloudflare Access email allowed to create the first admin.
+BOOTSTRAP_ADMIN_EMAIL=you@example.com
+
+# Production Access JWT validation (required with Worker Static Assets).
+TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+POLICY_AUD=your_access_application_audience_tag

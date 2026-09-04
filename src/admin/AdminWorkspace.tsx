@@ -22,29 +22,31 @@ import {
   Wrench,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { RoleSwitcher } from '../auth/RoleSwitcher'
-import type { AppRole } from '../auth/roles'
+import type { AuthenticatedUser } from '../auth/session'
+import { UserProfile } from '../auth/UserProfile'
 import { listFulfillmentSessions } from '../fulfillment/storage'
 import type { FulfillmentSession } from '../fulfillment/workflow'
 import { listOrders, type SavedOrder } from '../orders/storage'
-import { ProductDatabase } from '../products/ProductDatabase'
-import { isProductVerified, listProducts, type Product } from '../products/storage'
+import { getAdminProductPage, type SharedCatalogProduct } from '../products/sharedApi'
+import { AdminUsersPage } from './AdminUsersPage'
+import { SharedProductDatabase } from './SharedProductDatabase'
 import { adminSectionFromHash } from './routing'
 
 export type AdminSection = 'overview' | 'warehouse' | 'products' | 'workers' | 'orders' | 'reports' | 'settings'
 
 type AdminWorkspaceProps = {
-  role: AppRole
-  onRoleChange: (role: AppRole) => void
+  user: AuthenticatedUser
 }
 
 type AdminData = {
-  products: Product[]
+  products: SharedCatalogProduct[]
+  productTotal: number
+  unverifiedProductTotal: number
   orders: SavedOrder[]
   sessions: FulfillmentSession[]
 }
 
-const emptyData: AdminData = { products: [], orders: [], sessions: [] }
+const emptyData: AdminData = { products: [], productTotal: 0, unverifiedProductTotal: 0, orders: [], sessions: [] }
 
 const adminNavigation = [
   { section: 'overview' as const, label: 'Обзор', icon: LayoutDashboard },
@@ -74,7 +76,7 @@ function AdminPageHeading({ eyebrow, title, description, actions }: { eyebrow: s
 function AdminOverview({ data }: { data: AdminData }) {
   const activeSessions = data.sessions.filter((session) => session.status === 'in-progress').length
   const pausedSessions = data.sessions.filter((session) => session.status === 'paused').length
-  const unverifiedProducts = data.products.filter((product) => !isProductVerified(product)).length
+  const unverifiedProducts = data.unverifiedProductTotal
   const completedSessions = data.sessions.filter((session) => session.status === 'completed').length
 
   return (
@@ -84,7 +86,7 @@ function AdminOverview({ data }: { data: AdminData }) {
       <section className="admin-kpi-grid" aria-label="Показатели склада">
         <article><span className="green"><Activity size={20} /></span><div><small>Активные сборки</small><strong>{activeSessions}</strong><em>{pausedSessions ? `${pausedSessions} на паузе` : 'Без задержек'}</em></div></article>
         <article><span className="blue"><ClipboardList size={20} /></span><div><small>Заказы в базе</small><strong>{data.orders.length}</strong><em>{completedSessions} завершено</em></div></article>
-        <article><span className="violet"><Boxes size={20} /></span><div><small>Товаров</small><strong>{data.products.length}</strong><em>{unverifiedProducts} требуют проверки</em></div></article>
+        <article><span className="violet"><Boxes size={20} /></span><div><small>Товаров</small><strong>{data.productTotal}</strong><em>{unverifiedProducts} требуют проверки</em></div></article>
         <article><span className="amber"><FileWarning size={20} /></span><div><small>Открытые репорты</small><strong>0</strong><em>Модуль подготовлен</em></div></article>
       </section>
 
@@ -150,22 +152,6 @@ function WarehouseConstructorTemplate() {
   )
 }
 
-function WorkersTemplate({ data }: { data: AdminData }) {
-  const active = data.sessions.filter((session) => session.status === 'in-progress').length
-  const completed = data.sessions.filter((session) => session.status === 'completed').length
-  return (
-    <div className="admin-page">
-      <AdminPageHeading eyebrow="КОМАНДА" title="Сборщики и смены" description="Управление ролями, текущими заданиями и рабочей нагрузкой." actions={<button className="admin-primary-action" type="button" disabled><Plus size={17} />Добавить сотрудника</button>} />
-      <div className="admin-template-notice"><UserCog size={19} /><div><b>Шаблон локального профиля</b><span>До появления backend здесь отображается один локальный пользователь. Структура готова для команд и ролей.</span></div></div>
-      <section className="admin-team-summary"><article><small>На смене</small><strong>1</strong><span>из 1 сотрудника</span></article><article><small>Активных заказов</small><strong>{active}</strong><span>в локальной базе</span></article><article><small>Завершено</small><strong>{completed}</strong><span>за всё время</span></article></section>
-      <section className="admin-panel admin-table-panel">
-        <header><div><span>Сотрудники</span><h2>Доступ и состояние</h2></div><label><Search size={16} /><input aria-label="Поиск сотрудника" placeholder="Поиск по имени" disabled /></label></header>
-        <div className="admin-data-table"><div className="admin-data-row admin-data-head"><span>Сотрудник</span><span>Роль</span><span>Статус</span><span>Текущая задача</span><span>Последняя активность</span></div><div className="admin-data-row"><span className="admin-worker-cell"><i>АМ</i><span><b>Алексей Морозов</b><small>Локальный профиль</small></span></span><span><em className="admin-role-pill">Сборщик</em></span><span><em className="admin-state-pill active">На смене</em></span><span>{active ? 'Сборка заказа' : 'Свободен'}</span><span>Сейчас</span></div></div>
-      </section>
-    </div>
-  )
-}
-
 function OrdersAdminPage({ data }: { data: AdminData }) {
   const sessions = useMemo(() => new Map(data.sessions.map((session) => [session.orderId, session])), [data.sessions])
   return (
@@ -197,15 +183,15 @@ function AdminSettingsTemplate() {
     <div className="admin-page">
       <AdminPageHeading eyebrow="СИСТЕМА" title="Настройки и доступ" description="Параметры ролей, локального хранения и будущей синхронизации." />
       <div className="admin-settings-grid">
-        <section className="admin-panel admin-settings-card"><header><span><ShieldCheck size={20} /></span><div><h2>Роли и права</h2><p>Сборщик, водитель погрузчика и администратор</p></div></header><div className="admin-setting-row"><div><b>Переключение ролей</b><small>Сейчас доступно в демонстрационном режиме</small></div><em>Прототип</em></div><div className="admin-setting-row"><div><b>Настоящая авторизация</b><small>Потребует backend и управления пользователями</small></div><em>Позже</em></div></section>
-        <section className="admin-panel admin-settings-card"><header><span><Database size={20} /></span><div><h2>Данные</h2><p>Локальная база этого устройства</p></div></header><div className="admin-setting-row"><div><b>IndexedDB</b><small>Товары, заказы и прогресс сборки</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>Синхронизация</b><small>Общая база между устройствами</small></div><em>Нужен backend</em></div></section>
+        <section className="admin-panel admin-settings-card"><header><span><ShieldCheck size={20} /></span><div><h2>Роли и права</h2><p>Сборщик и администратор</p></div></header><div className="admin-setting-row"><div><b>Cloudflare Access</b><small>Подтверждает email пользователя до входа в приложение</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>Роли Worker</b><small>Права проверяются сервером для каждого API-запроса</small></div><em className="ready">Активно</em></div></section>
+        <section className="admin-panel admin-settings-card"><header><span><Database size={20} /></span><div><h2>Данные</h2><p>Общая и локальная части</p></div></header><div className="admin-setting-row"><div><b>Cloudflare D1</b><small>Единый каталог товаров и пользователи</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>IndexedDB</b><small>Заказы и прогресс пока остаются на устройстве</small></div><em>Переходный этап</em></div></section>
         <section className="admin-panel admin-settings-card"><header><span><Bell size={20} /></span><div><h2>Уведомления</h2><p>Репорты и критические события</p></div></header><div className="admin-setting-row"><div><b>Репорты сборщиков</b><small>Центр уведомлений подготовлен</small></div><em>Шаблон</em></div><div className="admin-setting-row"><div><b>Push-уведомления</b><small>PWA на рабочих телефонах</small></div><em>Позже</em></div></section>
       </div>
     </div>
   )
 }
 
-export function AdminWorkspace({ role, onRoleChange }: AdminWorkspaceProps) {
+export function AdminWorkspace({ user }: AdminWorkspaceProps) {
   const [activeSection, setActiveSection] = useState<AdminSection>(() => adminSectionFromHash(window.location.hash))
   const [data, setData] = useState<AdminData>(emptyData)
   const [isLoading, setIsLoading] = useState(true)
@@ -220,16 +206,16 @@ export function AdminWorkspace({ role, onRoleChange }: AdminWorkspaceProps) {
   useEffect(() => {
     let cancelled = false
     setIsLoading(true)
-    Promise.all([listProducts(), listOrders(), listFulfillmentSessions()])
-      .then(([products, orders, sessions]) => { if (!cancelled) setData({ products, orders, sessions }) })
+    Promise.all([getAdminProductPage(), listOrders(), listFulfillmentSessions()])
+      .then(([productPage, orders, sessions]) => { if (!cancelled) setData({ products: productPage.items, productTotal: productPage.total, unverifiedProductTotal: productPage.unverified, orders, sessions }) })
       .catch(console.error)
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
   }, [activeSection])
 
   const content = activeSection === 'warehouse' ? <WarehouseConstructorTemplate />
-    : activeSection === 'products' ? <ProductDatabase />
-      : activeSection === 'workers' ? <WorkersTemplate data={data} />
+    : activeSection === 'products' ? <SharedProductDatabase />
+      : activeSection === 'workers' ? <AdminUsersPage currentUser={user} />
         : activeSection === 'orders' ? <OrdersAdminPage data={data} />
           : activeSection === 'reports' ? <ReportsTemplate />
             : activeSection === 'settings' ? <AdminSettingsTemplate />
@@ -241,10 +227,10 @@ export function AdminWorkspace({ role, onRoleChange }: AdminWorkspaceProps) {
         <div className="brand"><div className="brand-mark"><Warehouse size={22} strokeWidth={2.2} /></div><div><strong>Warehouse Pilot</strong><span>Панель администратора</span></div></div>
         <div className="admin-mode-badge"><ShieldCheck size={15} />Режим управления</div>
         <nav className="main-nav" aria-label="Навигация администратора">{adminNavigation.map(({ section, label, icon: Icon }) => <a className={activeSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={19} />{label}</a>)}</nav>
-        <div className="sidebar-bottom"><div className="local-card"><span className="local-icon"><Database size={18} /></span><div><strong>Локальный прототип</strong><span>Роли пока не ограничивают доступ технически</span></div></div><RoleSwitcher role={role} onRoleChange={onRoleChange} /></div>
+        <div className="sidebar-bottom"><div className="local-card"><span className="local-icon"><Database size={18} /></span><div><strong>Общая база D1</strong><span>Доступ проверяется на Worker</span></div></div><UserProfile user={user} /></div>
       </aside>
       <main className="main-content admin-main-content">
-        <header className="topbar admin-topbar"><div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div><div className="admin-topbar-actions"><span className="admin-sync-state"><i />Локальные данные</span><button type="button" aria-label="Уведомления администратора"><Bell size={18} /><i /></button><RoleSwitcher compact role={role} onRoleChange={onRoleChange} /></div></header>
+        <header className="topbar admin-topbar"><div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div><div className="admin-topbar-actions"><span className="admin-sync-state"><i />D1 подключена</span><button type="button" aria-label="Уведомления администратора"><Bell size={18} /><i /></button><UserProfile compact user={user} /></div></header>
         {isLoading && <div className="admin-loading-line" />}
         {content}
       </main>

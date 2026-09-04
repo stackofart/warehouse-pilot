@@ -2,6 +2,15 @@
   "name": "warehouse-pilot",
   "compatibility_date": "2026-08-22",
   "main": "./worker/index.js",
+  "keep_vars": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "warehouse-pilot-db",
+      "database_id": "96cfeca0-4d3a-436f-95e0-a5fbdeac9e13",
+      "migrations_dir": "migrations"
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

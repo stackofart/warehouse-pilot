@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Flashlight,
   FlashlightOff,
-  Globe2,
   History,
   ImageUp,
   Keyboard,
@@ -18,8 +17,8 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
-import { isProductVerified, listProducts, type Product } from '../products/storage'
-import { ProductResearchModal } from '../products/ProductResearchModal'
+import { isProductVerified, type Product } from '../products/storage'
+import { matchSharedProducts } from '../products/sharedApi'
 import { decodeBarcodes, prepareBarcodeEngine, type DecodedBarcode } from './barcodeEngine'
 import { advanceBarcodeConsensus, findProductByBarcode, normalizeBarcode, type BarcodeConsensus } from './barcodeUtils'
 
@@ -31,6 +30,7 @@ type ScanEntry = {
   format: string
   scannedAt: string
   product?: Product
+  catalogState: 'searching' | 'ready' | 'error'
 }
 
 type TorchTrackCapabilities = MediaTrackCapabilities & { torch?: boolean }
@@ -62,9 +62,6 @@ export function BarcodeScanner() {
   const loopTokenRef = useRef(0)
   const scanPausedRef = useRef(false)
   const consensusRef = useRef<BarcodeConsensus | null>(null)
-  const productsRef = useRef<Product[]>([])
-
-  const [products, setProducts] = useState<Product[]>([])
   const [scannerState, setScannerState] = useState<ScannerState>('idle')
   const [statusText, setStatusText] = useState('Камера выключена')
   const [error, setError] = useState('')
@@ -74,20 +71,6 @@ export function BarcodeScanner() {
   const [torchAvailable, setTorchAvailable] = useState(false)
   const [torchEnabled, setTorchEnabled] = useState(false)
   const [stillImageBusy, setStillImageBusy] = useState(false)
-  const [researchTarget, setResearchTarget] = useState<{ barcode: string; product?: Product } | null>(null)
-
-  useEffect(() => {
-    let active = true
-    listProducts().then((items) => {
-      if (!active) return
-      productsRef.current = items
-      setProducts(items)
-    }).catch((reason) => {
-      console.error(reason)
-      if (active) setError('Не удалось прочитать локальную базу товаров.')
-    })
-    return () => { active = false }
-  }, [])
 
   const stopCamera = () => {
     loopTokenRef.current += 1
@@ -118,7 +101,7 @@ export function BarcodeScanner() {
       barcode,
       format: decoded.format || 'Вручную',
       scannedAt: new Date().toISOString(),
-      product: findProductByBarcode(productsRef.current, barcode),
+      catalogState: 'searching',
     }
     setResult(entry)
     setHistory((current) => [entry, ...current].slice(0, 20))
@@ -130,6 +113,16 @@ export function BarcodeScanner() {
       setStatusText('Код найден — проверьте товар')
     }
     navigator.vibrate?.(100)
+    void matchSharedProducts([{ barcode }]).then((matches) => {
+      const product = findProductByBarcode(matches, barcode)
+      setResult((current) => current?.id === entry.id ? { ...current, product, catalogState: 'ready' } : current)
+      setHistory((current) => current.map((item) => item.id === entry.id ? { ...item, product, catalogState: 'ready' } : item))
+    }).catch((reason) => {
+      console.error(reason)
+      setResult((current) => current?.id === entry.id ? { ...current, catalogState: 'error' } : current)
+      setHistory((current) => current.map((item) => item.id === entry.id ? { ...item, catalogState: 'error' } : item))
+      setError('Код считан, но общая база сейчас недоступна.')
+    })
   }
 
   const captureFrame = () => {
@@ -283,21 +276,13 @@ export function BarcodeScanner() {
     setManualCode('')
   }
 
-  const handleResearchedProduct = (product: Product) => {
-    productsRef.current = [product, ...productsRef.current.filter((item) => item.id !== product.id)]
-    setProducts(productsRef.current)
-    setResult((current) => current?.barcode === product.barcode ? { ...current, product } : current)
-    setHistory((current) => current.map((entry) => entry.barcode === product.barcode ? { ...entry, product } : entry))
-    setResearchTarget({ barcode: product.barcode, product })
-  }
-
   return (
     <div className="page scanner-page">
       <div className="page-heading scanner-heading">
         <div>
-          <p className="eyebrow">ЛОКАЛЬНЫЙ СКАНЕР</p>
+          <p className="eyebrow">СКАНЕР И ОБЩАЯ БАЗА</p>
           <h1>Сканер штрихкодов</h1>
-          <p>Наведите камеру на код — приложение найдёт товар в локальной базе. Изображение никуда не отправляется.</p>
+          <p>Код распознаётся на телефоне, затем приложение запрашивает только этот товар в общей базе. Изображение никуда не отправляется.</p>
         </div>
         <span className="scanner-engine-badge"><ShieldCheck size={17} /> zxing-wasm · на устройстве</span>
       </div>
@@ -350,11 +335,11 @@ export function BarcodeScanner() {
         <aside className="scanner-result-column">
           <section className={`scanner-result-card ${result ? 'has-result' : ''}`}>
             {!result ? (
-              <div className="scanner-result-empty"><Barcode size={34} /><b>Результат появится здесь</b><span>В базе загружено товаров: {products.length}</span></div>
+              <div className="scanner-result-empty"><Barcode size={34} /><b>Результат появится здесь</b><span>Полный каталог сборщику не загружается</span></div>
             ) : (
               <>
                 <header><div><small>Считан {formatScanTime(result.scannedAt)}</small><strong>{result.barcode}</strong><span>{result.format}</span></div><CheckCircle2 size={28} /></header>
-                {result.product ? (
+                {result.catalogState === 'searching' ? <div className="scanner-product-missing"><RefreshCw className="spin" size={23} /><div><b>Ищем в общей базе</b><p>Передан только считанный штрихкод.</p></div></div> : result.product ? (
                   <div className="scanner-product-found">
                     <div className="scanner-product-match">
                       <div className="scanner-product-image">
@@ -367,10 +352,11 @@ export function BarcodeScanner() {
                         <dl><div><dt>מק״ט</dt><dd>{result.product.sku || '—'}</dd></div><div><dt>В коробке</dt><dd>{result.product.unitsPerBox || '—'}</dd></div></dl>
                       </div>
                     </div>
-                    <button className="scanner-research-button" type="button" onClick={() => setResearchTarget({ barcode: result.barcode, product: result.product })}><Globe2 size={17} />{result.product.research?.status === 'needs_review' ? 'Открыть найденные данные' : 'Сверить этот товар в интернете'}</button>
                   </div>
+                ) : result.catalogState === 'error' ? (
+                  <div className="scanner-product-missing"><TriangleAlert size={23} /><div><b>Общая база недоступна</b><p>Код считан. Повторите поиск, когда восстановится соединение.</p></div></div>
                 ) : (
-                  <div className="scanner-product-missing"><TriangleAlert size={23} /><div><b>Товар не найден в базе</b><p>Код считан, но совпадения нет. Можно найти публичные данные по этому штрихкоду и затем указать מק״ט и адрес склада.</p><div><button type="button" onClick={() => setResearchTarget({ barcode: result.barcode })}><Globe2 size={16} />Найти в интернете</button><a href="#products">Добавить вручную</a></div></div></div>
+                  <div className="scanner-product-missing"><TriangleAlert size={23} /><div><b>Товар не найден в общей базе</b><p>Код считан, но совпадения нет. Передайте штрихкод администратору для добавления карточки.</p></div></div>
                 )}
               </>
             )}
@@ -379,12 +365,11 @@ export function BarcodeScanner() {
           <section className="scanner-history-card">
             <header><div><History size={19} /><h2>Последние сканы</h2></div>{history.length > 0 && <button type="button" onClick={() => setHistory([])} title="Очистить историю"><Trash2 size={17} /></button>}</header>
             {history.length === 0 ? <p className="scanner-history-empty">В этой сессии кодов ещё нет.</p> : (
-              <ol>{history.map((entry) => <li key={entry.id}><span className={entry.product ? 'found' : 'missing'}>{entry.product ? <CheckCircle2 size={16} /> : <TriangleAlert size={16} />}</span><div><b dir="auto">{entry.product?.name ?? entry.barcode}</b><small>{entry.product ? `${entry.product.location} · ${entry.barcode}` : `Нет в базе · ${entry.barcode}`}</small></div><time>{formatScanTime(entry.scannedAt)}</time></li>)}</ol>
+              <ol>{history.map((entry) => <li key={entry.id}><span className={entry.product ? 'found' : 'missing'}>{entry.catalogState === 'searching' ? <RefreshCw className="spin" size={16} /> : entry.product ? <CheckCircle2 size={16} /> : <TriangleAlert size={16} />}</span><div><b dir="auto">{entry.product?.name ?? entry.barcode}</b><small>{entry.product ? `${entry.product.location} · ${entry.barcode}` : entry.catalogState === 'searching' ? 'Поиск в общей базе' : `Нет в базе · ${entry.barcode}`}</small></div><time>{formatScanTime(entry.scannedAt)}</time></li>)}</ol>
             )}
           </section>
         </aside>
       </div>
-      {researchTarget && <ProductResearchModal barcode={researchTarget.barcode} product={researchTarget.product} onClose={() => setResearchTarget(null)} onProductSaved={handleResearchedProduct} />}
     </div>
   )
 }

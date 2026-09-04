@@ -31,17 +31,18 @@ import { OpenAIRecognitionError, recognizeOrderImageWithOpenAI } from './recogni
 import { mergeOcrResults } from './recognition/merge'
 import { OrdersDatabase } from './orders/OrdersDatabase'
 import { listOrders, saveOrder } from './orders/storage'
-import { ProductDatabase } from './products/ProductDatabase'
+import { CatalogSearch } from './products/CatalogSearch'
 import { PalletWorkspace } from './pallet/PalletWorkspace'
-import { listProducts, saveOrderProducts } from './products/storage'
+import { listProducts } from './products/storage'
 import { reconcileRecognizedItems } from './products/reconciliation'
+import { matchSharedProducts } from './products/sharedApi'
 import { OrderWorkflow } from './fulfillment/OrderWorkflow'
 import { WarehouseMap } from './warehouse/WarehouseMap'
 import { OverviewDashboard } from './overview/OverviewDashboard'
 import { BarcodeScanner } from './scanner/BarcodeScanner'
 import { AdminWorkspace } from './admin/AdminWorkspace'
-import { RoleSwitcher } from './auth/RoleSwitcher'
-import { loadAppRole, saveAppRole, type AppRole } from './auth/roles'
+import { loadSession, type AuthenticatedUser } from './auth/session'
+import { UserProfile } from './auth/UserProfile'
 import './App.css'
 
 type OcrState = 'idle' | 'ready' | 'working' | 'success' | 'error'
@@ -111,7 +112,17 @@ function App() {
   const [productSyncMessage, setProductSyncMessage] = useState('')
   const [orderCount, setOrderCount] = useState(0)
   const [activeSection, setActiveSection] = useState<AppSection>(sectionFromHash)
-  const [userRole, setUserRole] = useState<AppRole>(loadAppRole)
+  const [sessionUser, setSessionUser] = useState<AuthenticatedUser | null>(null)
+  const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [sessionError, setSessionError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    loadSession()
+      .then((user) => { if (!cancelled) { setSessionUser(user); setSessionState('ready') } })
+      .catch((reason) => { if (!cancelled) { setSessionError(reason instanceof Error ? reason.message : 'Не удалось проверить доступ.'); setSessionState('error') } })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     const updateSection = () => setActiveSection(sectionFromHash())
@@ -172,7 +183,14 @@ function App() {
         result = mergeOcrResults(localResults)
       }
       if (runId !== recognitionRun.current) return
-      const reconciliation = reconcileRecognizedItems(result.items, await listProducts())
+      let catalogProducts
+      try {
+        catalogProducts = await matchSharedProducts(result.items)
+      } catch (reason) {
+        console.warn('Shared catalog matching is unavailable; using the local offline cache.', reason)
+        catalogProducts = await listProducts()
+      }
+      const reconciliation = reconcileRecognizedItems(result.items, catalogProducts)
       setRecognizedText(formatRecognizedOrderText(result.orderNumber, reconciliation.items, result.summary))
       setConfidence(result.confidence)
       setItems(reconciliation.items)
@@ -293,15 +311,9 @@ function App() {
         sourceFileName: files[0]?.name ?? '',
         sourceFileNames: files.map((file) => file.name),
       })
-      const productResult = await saveOrderProducts(items, { overwriteExisting: false, newProductVerification: 'unverified', source: 'recognition' })
       setSavedOrderId(saved.id)
       setSavedCreatedAt(saved.createdAt)
-      setProductSyncMessage([
-        `${productResult.saved} новых товаров добавлено как непроверенные`,
-        productResult.matchedExisting ? `${productResult.matchedExisting} уже связаны с базой` : '',
-        productResult.incomplete ? `${productResult.incomplete} не добавлено из-за пустых полей` : '',
-        productResult.conflicts ? `${productResult.conflicts} конфликтов` : '',
-      ].filter(Boolean).join(' · '))
+      setProductSyncMessage('Заказ сохранён на этом устройстве. Новые позиции не добавляются в общую базу без проверки администратора.')
       setSaveState('saved')
     } catch (reason) {
       console.error(reason)
@@ -311,13 +323,11 @@ function App() {
 
   const validRows = items.filter((item) => item.warnings.length === 0).length
 
-  const changeUserRole = (role: AppRole) => {
-    saveAppRole(role)
-    setUserRole(role)
-    window.location.hash = role === 'admin' ? 'admin' : 'overview'
-  }
+  if (sessionState === 'loading') return <div className="auth-gate"><div className="brand-mark"><Warehouse size={26} /></div><h1>Warehouse Pilot</h1><p>Проверяем доступ и роль…</p><span className="auth-loader" /></div>
 
-  if (userRole === 'admin') return <AdminWorkspace role={userRole} onRoleChange={changeUserRole} />
+  if (sessionState === 'error' || !sessionUser) return <div className="auth-gate error"><div className="brand-mark"><ShieldCheck size={26} /></div><h1>Доступ не открыт</h1><p>{sessionError}</p><button type="button" onClick={() => window.location.reload()}>Повторить проверку</button><small>Администратор должен добавить ваш email, а вход выполняется через Cloudflare Access.</small></div>
+
+  if (sessionUser.role === 'admin') return <AdminWorkspace user={sessionUser} />
 
   return (
     <div className="app-shell">
@@ -344,20 +354,20 @@ function App() {
         <div className="sidebar-bottom">
           <div className="local-card">
             <span className="local-icon"><ShieldCheck size={18} /></span>
-            <div><strong>Локальная база</strong><span>Заказы и товары остаются на устройстве</span></div>
+            <div><strong>Защищённый доступ</strong><span>Товары доступны только через поиск</span></div>
           </div>
           <a href="#help" className="help-link"><HelpCircle size={18} />Помощь и поддержка</a>
-          <RoleSwitcher role={userRole} onRoleChange={changeUserRole} />
+          <UserProfile user={sessionUser} />
         </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div>
-          <div className="worker-topbar-actions"><div className="shift-status"><span /> Смена активна <b>08:42</b></div><div className="worker-mobile-role"><RoleSwitcher compact role={userRole} onRoleChange={changeUserRole} /></div></div>
+          <div className="worker-topbar-actions"><div className="shift-status"><span /> Смена активна <b>08:42</b></div><div className="worker-mobile-role"><UserProfile compact user={sessionUser} /></div></div>
         </header>
 
-        {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'scanner' ? <BarcodeScanner /> : activeSection === 'products' ? <ProductDatabase /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
+        {activeSection === 'overview' ? <OverviewDashboard /> : activeSection === 'scanner' ? <BarcodeScanner /> : activeSection === 'products' ? <CatalogSearch /> : activeSection === 'orders' ? <OrdersDatabase /> : activeSection === 'warehouse' ? <WarehouseMap /> : activeSection === 'pallet' ? <PalletWorkspace /> : activeSection === 'workflow' ? <OrderWorkflow /> : <div className="page">
           <div className="page-heading">
             <div>
               <p className="eyebrow">НОВЫЙ ЗАКАЗ</p>
@@ -541,7 +551,7 @@ function App() {
                 <li><span>02</span><div><b>Добавьте света</b><p>Избегайте теней и бликов на бумаге.</p></div></li>
                 <li><span>03</span><div><b>Покажите весь лист</b><p>Все края должны попадать в кадр.</p></div></li>
               </ul>
-              <div className="privacy-note"><ShieldCheck size={18} /><p><b>Ваши данные защищены</b><br />{recognitionMode === 'openai' ? 'В OpenAI отправляются только выбранные фото; база товаров остаётся на устройстве.' : 'Изображения обрабатываются только на этом устройстве.'}</p></div>
+              <div className="privacy-note"><ShieldCheck size={18} /><p><b>Ваши данные защищены</b><br />{recognitionMode === 'openai' ? 'В OpenAI отправляются только выбранные фото; с общей базой сопоставляются только найденные מק״ט и штрихкоды.' : 'Изображения обрабатываются только на этом устройстве.'}</p></div>
             </aside>
           </div>
 

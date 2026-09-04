@@ -1,3 +1,8 @@
+import { authenticateRequest, publicUser, requireAdmin } from './auth.js'
+import { handleCatalogRequest } from './catalog.js'
+import { jsonResponse, methodNotAllowed } from './http.js'
+import { handleUsersRequest } from './users.js'
+
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const DEFAULT_MODEL = 'gpt-5.6-luna'
 const DEFAULT_PRODUCT_MODEL = 'gpt-5.6-terra'
@@ -154,16 +159,6 @@ Evidence rules:
 - Return null, confidence=low, valueType=not_found and an empty sourceUrls array when reliable evidence is missing.
 - Do not guess. Do not convert a similarly named size, flavor, pack count, market variant, or barcode into this product.
 - Keep source URLs as complete absolute http(s) URLs from the pages actually consulted.`
-
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-    },
-  })
-}
 
 function bytesToBase64(bytes) {
   let binary = ''
@@ -437,24 +432,43 @@ async function researchProduct(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
+    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
+
+    const authenticated = await authenticateRequest(request, env, ctx)
+    if (authenticated.response) return authenticated.response
+    const user = authenticated.user
+
+    if (url.pathname === '/api/me') {
+      if (request.method !== 'GET') return methodNotAllowed(['GET'])
+      return jsonResponse({ user: publicUser(user) })
+    }
+
+    const catalogResponse = await handleCatalogRequest(request, env, user, user.role === 'admin')
+    if (catalogResponse) return catalogResponse
+
+    if (url.pathname.startsWith('/api/admin/users')) {
+      const forbidden = requireAdmin(user)
+      if (forbidden) return forbidden
+      const usersResponse = await handleUsersRequest(request, env, user)
+      return usersResponse || jsonResponse({ error: 'API-маршрут не найден.', code: 'not_found' }, 404)
+    }
+
     if (url.pathname === '/api/recognize-order') {
-      if (request.method !== 'POST') {
-        return jsonResponse({ error: 'Метод не поддерживается.', code: 'method_not_allowed' }, 405)
-      }
+      if (request.method !== 'POST') return methodNotAllowed(['POST'])
       return recognizeOrder(request, env)
     }
 
     if (url.pathname === '/api/research-product') {
-      if (request.method !== 'POST') {
-        return jsonResponse({ error: 'Метод не поддерживается.', code: 'method_not_allowed' }, 405)
-      }
+      const forbidden = requireAdmin(user)
+      if (forbidden) return forbidden
+      if (request.method !== 'POST') return methodNotAllowed(['POST'])
       return researchProduct(request, env)
     }
 
-    return env.ASSETS.fetch(request)
+    return jsonResponse({ error: 'API-маршрут не найден.', code: 'not_found' }, 404)
   },
 }
 
