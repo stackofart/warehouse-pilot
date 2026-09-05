@@ -10,7 +10,7 @@ import { PalletScene } from './PalletScene'
 import { demoOrders, demoProducts } from './demoData'
 
 function palletOrderIdFromHash() {
-  const encodedId = window.location.hash.match(/^#pallet\/(.+)$/)?.[1] ?? ''
+  const encodedId = window.location.hash.match(/^#(?:admin\/)?pallet\/(.+)$/)?.[1] ?? ''
   try {
     return decodeURIComponent(encodedId)
   } catch {

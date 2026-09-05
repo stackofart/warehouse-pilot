@@ -7,7 +7,7 @@ const fail = (error, status = 400) => jsonResponse({ error, code: status === 409
 const sessionFromRow = row => row ? { ...JSON.parse(row.document_json), serverVersion: row.version, syncStatus: 'synced' } : null
 
 export async function permittedOrder(env, user, id) {
-  const row = await env.DB.prepare('SELECT * FROM orders WHERE id = ?').bind(id).first()
+  const row = await env.DB.prepare('SELECT o.*, u.display_name AS assignee_name FROM orders o LEFT JOIN users u ON u.id = o.assigned_to WHERE o.id = ?').bind(id).first()
   return row && (user.role === 'admin' || user.role === 'picker' && row.assigned_to === user.id) ? row : null
 }
 
@@ -43,6 +43,7 @@ async function saveOrder(request, env, user, id) {
 }
 
 async function saveSession(request, env, user, order) {
+  if (user.role !== 'picker' || order.assigned_to !== user.id) return fail('Сборку выполняет назначенный комплектовщик. Администратору доступен просмотр прогресса.', 403)
   const parsed = await readJson(request)
   if (parsed.response) return parsed.response
   const { session, expectedVersion, mutationId } = parsed.body || {}
@@ -69,8 +70,8 @@ async function saveSession(request, env, user, order) {
   const json = JSON.stringify(next)
   if (json.length > 500000) return fail('Слишком большой журнал заказа.', 413)
   // Assignment and session revision are checked in the write itself, not only by a prior SELECT.
-  const condition = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND version = ? AND (assigned_to = ? OR ? = 1))'
-  const values = [order.id, order.version, user.id, Number(user.role === 'admin')]
+  const condition = 'EXISTS (SELECT 1 FROM orders WHERE id = ? AND version = ? AND assigned_to = ?)'
+  const values = [order.id, order.version, user.id]
   const write = previous
     ? env.DB.prepare(`UPDATE picking_sessions SET document_json = ?, version = version + 1, last_mutation_id = ?, updated_by = ?, updated_at = ? WHERE order_id = ? AND version = ? AND ${condition}`).bind(json, mutationId, user.id, now, order.id, expectedVersion, ...values)
     : env.DB.prepare(`INSERT INTO picking_sessions (order_id, document_json, last_mutation_id, updated_by, updated_at) SELECT ?, ?, ?, ?, ? WHERE ${condition} ON CONFLICT(order_id) DO NOTHING`).bind(order.id, json, mutationId, user.id, now, ...values)

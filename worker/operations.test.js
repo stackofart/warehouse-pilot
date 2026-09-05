@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, it, expect } from 'vitest'
 import worker from './index.js'
 import { testDatabase } from './testDatabase.js'
-import { createFulfillmentSession, updateFulfillmentItemNote, completeFastFulfillmentSession } from '../src/fulfillment/workflow'
+import { createFulfillmentSession, updateFulfillmentItem, updateFulfillmentItemNote, completeFastFulfillmentSession } from '../src/fulfillment/workflow'
 
 let database
 beforeEach(() => { database = testDatabase() })
@@ -19,6 +19,20 @@ async function setupOrder() {
   return made.body.order
 }
 describe('operations with real SQLite schema and D1 parameter limits', () => {
+  it('lets admins view an assigned order but reserves picking mutations for its picker', async () => {
+    await setupOrder()
+    const session = createFulfillmentSession('test-order', [1], { mode: 'fast' })
+    const body = { session, expectedVersion: 0, mutationId: crypto.randomUUID() }
+    expect((await call('admin', '/api/orders/test-order/session', 'PUT', body)).status).toBe(403)
+    expect((await call('admin', '/api/orders/test-order/session')).body.session).toBeNull()
+    expect((await call('picker', '/api/orders/test-order/session', 'PUT', body)).status).toBe(200)
+    const picked = updateFulfillmentItem(session, 1, 'picked')
+    expect((await call('picker', '/api/orders/test-order/session', 'PUT', { session: picked, expectedVersion: 1, mutationId: crypto.randomUUID() })).status).toBe(200)
+    const observed = await call('admin', '/api/orders/test-order/session')
+    expect(observed.body.session.items['1'].status).toBe('picked')
+    expect((await call('admin', '/api/orders/test-order')).body.order.assigneeName).toBe('picker')
+    expect((await call('admin', '/api/orders/test-order/session', 'PUT', { session: picked, expectedVersion: 2, mutationId: crypto.randomUUID() })).status).toBe(403)
+  })
   it('rejects cross-site browser mutations before authenticating', async () => {
     const response = await worker.fetch(new Request('https://warehouse.test/api/reports', { method: 'POST', headers: { origin: 'https://unrelated.test', 'content-type': 'text/plain' }, body: '{}' }), {}, {})
     expect(response.status).toBe(403)
@@ -88,7 +102,9 @@ describe('operations with real SQLite schema and D1 parameter limits', () => {
   it('requires admin confirmation before moving a catalog location and creates a replenishment queue', async () => {
     await setupOrder()
     const id = crypto.randomUUID()
-    expect((await call('picker', '/api/reports', 'POST', { id, orderId: 'test-order', row: 1, kind: 'moved', suggestedAddress: '24.F', note: 'Found here' })).status).toBe(201)
+    const moved = await call('picker', '/api/reports', 'POST', { id, orderId: 'test-order', row: 1, kind: 'moved', suggestedAddress: '24.F', note: '' })
+    expect(moved.status).toBe(201)
+    expect(moved.body.report).toMatchObject({ note: '', suggestedAddress: '24.F' })
     let current = (await call('admin', '/api/admin/products')).body.items[0]
     expect(current.location).toBe('23.F')
     expect((await call('picker', `/api/reports/${id}`, 'PATCH', { status: 'resolved', version: 1 })).status).toBe(403)

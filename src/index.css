@@ -10,7 +10,10 @@
 * { box-sizing: border-box; }
 html { min-width: 320px; background: #f6f8f7; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, textarea, input { font: inherit; }
+button, textarea, input, select { font: inherit; }
+button, input, textarea, select { min-width: 0; }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #318b6d; outline-offset: 3px; }
+button:disabled { cursor: not-allowed; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 a { color: inherit; }

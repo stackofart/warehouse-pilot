@@ -10,6 +10,7 @@ import {
   FileWarning,
   LayoutDashboard,
   Map as MapIcon,
+  Menu,
   PackageCheck,
   Search,
   Settings,
@@ -18,8 +19,9 @@ import {
   Users,
   Warehouse,
   Wrench,
+  X,
 } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import type { AuthenticatedUser } from '../auth/session'
 import { UserProfile } from '../auth/UserProfile'
 import { listFulfillmentSessions } from '../fulfillment/storage'
@@ -28,12 +30,14 @@ import { listOrders, type SavedOrder } from '../orders/storage'
 import { getAdminProductPage, type SharedCatalogProduct } from '../products/sharedApi'
 import { AdminUsersPage } from './AdminUsersPage'
 import { SharedProductDatabase } from './SharedProductDatabase'
-import { adminSectionFromHash } from './routing'
+import { adminHash, adminSectionFromHash } from './routing'
+import { AdminOrderDetail } from './AdminOrderDetail'
 import { OrderQueue } from '../orders/OrderQueue'
 import { ReportsQueue } from '../reports/ReportsQueue'
 import { getReports, type Report } from '../reports/api'
 
-export type AdminSection = 'overview' | 'warehouse' | 'products' | 'workers' | 'orders' | 'reports' | 'settings' | 'new-order'
+export type AdminSection = 'overview' | 'warehouse' | 'products' | 'workers' | 'orders' | 'reports' | 'settings' | 'new-order' | 'pallet'
+const PalletWorkspace = lazy(() => import('../pallet/PalletWorkspace').then(m => ({ default: m.PalletWorkspace })))
 
 type AdminWorkspaceProps = {
   user: AuthenticatedUser
@@ -165,14 +169,23 @@ function AdminSettingsTemplate() {
 }
 
 export function AdminWorkspace({ user, intake }: AdminWorkspaceProps) {
-  const [activeSection, setActiveSection] = useState<AdminSection>(() => adminSectionFromHash(window.location.hash))
+  const [hash, setHash] = useState(() => adminHash(window.location.hash))
+  const [drawer, setDrawer] = useState(false)
+  const activeSection = adminSectionFromHash(hash)
+  const navigationSection = activeSection === 'new-order' || activeSection === 'pallet' ? 'orders' : activeSection
+  const orderId = activeSection === 'orders' ? hash.split('/')[2] || '' : ''
   const [data, setData] = useState<AdminData>(emptyData)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!window.location.hash.startsWith('#admin')) window.location.hash = 'admin'
-    const updateSection = () => setActiveSection(adminSectionFromHash(window.location.hash))
+    const updateSection = () => {
+      const next = adminHash(window.location.hash)
+      if (next !== window.location.hash) window.location.replace(next)
+      setHash(next)
+      setDrawer(false)
+    }
+    updateSection()
     window.addEventListener('hashchange', updateSection)
     return () => window.removeEventListener('hashchange', updateSection)
   }, [])
@@ -191,10 +204,10 @@ export function AdminWorkspace({ user, intake }: AdminWorkspaceProps) {
     return () => { cancelled = true; clearInterval(timer) }
   }, [activeSection])
 
-  const content = activeSection === 'new-order' ? intake : activeSection === 'warehouse' ? <WarehouseConstructorTemplate />
+  const content = activeSection === 'new-order' ? intake : activeSection === 'pallet' ? <Suspense fallback={<p className="page">Загрузка паллеты…</p>}><a className="operations-back" href="#admin/orders">← К заказам</a><PalletWorkspace /></Suspense> : activeSection === 'warehouse' ? <WarehouseConstructorTemplate />
     : activeSection === 'products' ? <SharedProductDatabase />
       : activeSection === 'workers' ? <AdminUsersPage currentUser={user} />
-        : activeSection === 'orders' ? <OrderQueue user={user} />
+        : activeSection === 'orders' ? orderId ? <AdminOrderDetail key={orderId} orderId={orderId} /> : <OrderQueue user={user} />
           : activeSection === 'reports' ? <ReportsQueue role={user.role} />
             : activeSection === 'settings' ? <AdminSettingsTemplate />
               : <AdminOverview data={data} />
@@ -204,16 +217,17 @@ export function AdminWorkspace({ user, intake }: AdminWorkspaceProps) {
       <aside className="sidebar admin-sidebar">
         <div className="brand"><div className="brand-mark"><Warehouse size={22} strokeWidth={2.2} /></div><div><strong>Warehouse Pilot</strong><span>Панель администратора</span></div></div>
         <div className="admin-mode-badge"><ShieldCheck size={15} />Режим управления</div>
-        <nav className="main-nav" aria-label="Навигация администратора">{adminNavigation.map(({ section, label, icon: Icon }) => <a className={activeSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={19} />{label}</a>)}</nav>
+        <nav className="main-nav" aria-label="Навигация администратора">{adminNavigation.map(({ section, label, icon: Icon }) => <a className={navigationSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={19} />{label}</a>)}</nav>
         <div className="sidebar-bottom"><div className="local-card"><span className="local-icon"><Database size={18} /></span><div><strong>Общая база D1</strong><span>Доступ проверяется на Worker</span></div></div><UserProfile user={user} /></div>
       </aside>
       <main className="main-content admin-main-content">
-        <header className="topbar admin-topbar"><div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div><div className="admin-topbar-actions"><span className="admin-sync-state"><i />Общий контур D1</span><button type="button" aria-label="Уведомления администратора"><Bell size={18} /><i /></button><UserProfile compact user={user} /></div></header>
+        <header className="topbar admin-topbar"><button className="mobile-menu-trigger" aria-label="Открыть меню администратора" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu size={20} /></button><div className="mobile-brand"><strong>Управление складом</strong></div><div className="admin-topbar-actions"><a className="admin-sync-state" href="#admin/reports"><Bell size={16} />Сообщения</a><UserProfile compact user={user} /></div></header>
         {isLoading && <div className="admin-loading-line" />}
         {error && activeSection === 'overview' && <p role="alert" className="operations-message">{error} Показатели могут быть неактуальны.</p>}
         {content}
       </main>
-      <nav className="mobile-bottom-nav admin-mobile-nav" aria-label="Мобильная навигация администратора">{adminNavigation.map(({ section, label, icon: Icon }) => <a className={activeSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={20} /><span>{label === 'Конструктор склада' ? 'Склад' : label === 'Контроль и репорты' ? 'Репорты' : label === 'База товаров' ? 'Товары' : label}</span></a>)}</nav>
+      <nav className="mobile-bottom-nav admin-mobile-nav" aria-label="Мобильная навигация администратора">{adminNavigation.filter(entry => ['overview', 'products', 'workers', 'orders', 'reports'].includes(entry.section)).map(({ section, label, icon: Icon }) => <a className={navigationSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={20} /><span>{label === 'Контроль и репорты' ? 'Сообщения' : label === 'База товаров' ? 'Товары' : label}</span></a>)}</nav>
+      {drawer && <div className="mobile-navigation-drawer open"><button className="mobile-drawer-backdrop" aria-label="Закрыть меню" onClick={() => setDrawer(false)} /><aside aria-label="Все разделы администратора"><header><div className="brand-mark"><Warehouse size={22} /></div><div><b>Управление</b><span>Администратор</span></div><button aria-label="Закрыть меню разделов" onClick={() => setDrawer(false)}><X size={20} /></button></header><nav>{adminNavigation.map(({ section, label, icon: Icon }) => <a className={navigationSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={20} />{label}</a>)}</nav><UserProfile user={user} /></aside></div>}
     </div>
   )
 }

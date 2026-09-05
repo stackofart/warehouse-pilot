@@ -364,7 +364,7 @@ export function OrderIntake() {
                           <button className="primary-button save-button" type="button" disabled={saveState === 'saving'} onClick={() => void saveCurrentOrder()}>
                             <Save size={16} />{saveState === 'saving' ? 'Сохранение…' : saveState === 'saved' ? 'Сохранено' : 'Сохранить заказ'}
                           </button>
-                          {saveState === 'saved' && savedOrderId && <a className="secondary-button route-order-link" href={`#work/${encodeURIComponent(savedOrderId)}`}><ClipboardList size={16} />Открыть заказ</a>}
+                          {saveState === 'saved' && savedOrderId && <a className="secondary-button route-order-link" href={`#admin/orders/${encodeURIComponent(savedOrderId)}`}><ClipboardList size={16} />Открыть заказ</a>}
                         </div>
                       </div>
 

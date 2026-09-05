@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
-import { Boxes, ClipboardList, Cuboid, LayoutDashboard, Menu, Settings, Warehouse } from 'lucide-react'
+import { Boxes, ClipboardList, Cuboid, LayoutDashboard, Menu, Settings, Warehouse, X } from 'lucide-react'
 import { loadSession, type AuthenticatedUser } from './auth/session'
 import { configureStorageScope } from './storage/database'
 import { UserProfile } from './auth/UserProfile'
@@ -35,24 +35,23 @@ export default function App() {
   }, [])
   useEffect(() => {
     if (!user) return
-    const sync = () => { void Promise.all([flushSessions(), flushReports(), flushPallets()]).catch(console.error) }
+    const sync = () => { void Promise.all([...(user.role === 'picker' ? [flushSessions(), flushReports()] : []), flushPallets()]).catch(console.error) }
     sync(); window.addEventListener('online', sync)
     return () => window.removeEventListener('online', sync)
   }, [user])
   if (!user) return <div className="auth-gate"><Warehouse size={32} /><h1>Warehouse Pilot</h1><p>{error || 'Проверяем доступ…'}</p>{error && <button onClick={() => window.location.reload()}>Повторить вход</button>}</div>
   const work = hash.startsWith('#work/') || hash.startsWith('#route/')
   const pallet = hash.startsWith('#pallet')
-  if (user.role === 'admin' && !work && !pallet) return <Suspense fallback={<p className="page">Загрузка…</p>}><AdminWorkspace user={user} intake={<OrderIntake />} /></Suspense>
+  if (user.role === 'admin') return <Suspense fallback={<p className="page">Загрузка…</p>}><AdminWorkspace user={user} intake={<OrderIntake />} /></Suspense>
   const section = work ? 'orders' : pallet ? 'pallet' : nav.some(entry => hash === '#' + entry.id) ? hash.slice(1) : 'orders'
   const navigation = (user.role === 'replenisher' ? [{ id: 'reports', label: 'Пополнение', icon: Boxes }] : nav).map(({ id, label, icon: Icon }) => <a key={id} href={'#' + id} className={section === id ? 'active' : ''}><Icon size={20} /><span>{label}</span></a>)
   const changeMode = (value: MobileNavigationMode) => { setNavigationMode(value); try { localStorage.setItem('warehouse-pilot.mobile-navigation', value) } catch { /* Storage may be disabled. */ } }
   return <div className={'app-shell nav-' + navigationMode}>
-    <aside className="sidebar"><div className="brand"><Warehouse size={28} /><strong>Warehouse Pilot</strong></div><nav className="main-nav">{navigation}</nav><div className="sidebar-bottom"><UserProfile user={user} /></div></aside>
-    <main className="main-content"><header className="topbar"><button className="mobile-menu-trigger" aria-label="Открыть меню" onClick={() => setDrawer(true)}><Menu /></button><strong>Warehouse Pilot</strong><UserProfile compact user={user} /></header>
-      {user.role === 'admin' && <a className="operations-back" href="#admin/orders">← К распределению заказов</a>}
-      <Suspense fallback={<p className="page">Загрузка…</p>}>{user.role === 'replenisher' ? <ReportsQueue role={user.role} /> : work ? <OrderWorkflow /> : section === 'pallet' ? <PalletWorkspace /> : section === 'products' ? <CatalogSearch /> : section === 'overview' ? <OverviewDashboard /> : section === 'settings' ? <PickerSettings navigationMode={navigationMode} onNavigationModeChange={changeMode} /> : <OrderQueue user={user} />}</Suspense>
+    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Warehouse size={22} /></div><div><strong>Warehouse Pilot</strong><span>{user.role === 'picker' ? 'Комплектация заказов' : 'Пополнение склада'}</span></div></div><nav className="main-nav" aria-label="Основные разделы">{navigation}</nav><div className="sidebar-bottom"><UserProfile user={user} /></div></aside>
+    <main className="main-content"><header className="topbar worker-topbar"><button className="mobile-menu-trigger" aria-label="Открыть меню" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu size={20} /></button><div className="mobile-brand"><strong>Warehouse Pilot</strong></div><UserProfile compact user={user} /></header>
+      <Suspense fallback={<p className="page">Загрузка…</p>}>{user.role === 'replenisher' ? <ReportsQueue role={user.role} /> : work ? <OrderWorkflow key={hash.split('/')[1]} /> : section === 'pallet' ? <PalletWorkspace /> : section === 'products' ? <CatalogSearch /> : section === 'overview' ? <OverviewDashboard /> : section === 'settings' ? <PickerSettings navigationMode={navigationMode} onNavigationModeChange={changeMode} /> : <OrderQueue user={user} />}</Suspense>
     </main>
     {user.role !== 'replenisher' && navigationMode === 'bottom' && <nav className="mobile-bottom-nav picker-mobile-nav">{navigation}</nav>}
-    {drawer && <div className="mobile-navigation-drawer open"><button className="mobile-drawer-backdrop" aria-label="Закрыть меню" onClick={() => setDrawer(false)} /><aside><button onClick={() => setDrawer(false)}>Закрыть</button><nav>{navigation}</nav></aside></div>}
+    {drawer && <div className="mobile-navigation-drawer open"><button className="mobile-drawer-backdrop" aria-label="Закрыть меню" onClick={() => setDrawer(false)} /><aside aria-label="Меню разделов"><header><div className="brand-mark"><Warehouse size={22} /></div><div><b>Warehouse Pilot</b><span>Рабочее пространство</span></div><button aria-label="Закрыть меню разделов" onClick={() => setDrawer(false)}><X size={20} /></button></header><nav>{navigation}</nav><UserProfile user={user} /></aside></div>}
   </div>
 }
