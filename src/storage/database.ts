@@ -1,15 +1,21 @@
 export const DATABASE_NAME = 'warehouse-pilot'
-export const DATABASE_VERSION = 3
+export const DATABASE_VERSION = 4
 export const ORDERS_STORE = 'orders'
 export const PRODUCTS_STORE = 'products'
 export const FULFILLMENT_STORE = 'fulfillmentSessions'
+export const OUTBOX_STORE = 'outbox'
+export const KV_STORE = 'settings'
+let userScope: string | null = null
+export function configureStorageScope(userId: string | null) { userScope = userId }
+export function getStorageScope() { return userScope }
 
-export function openDatabase() {
+export function openDatabase(legacy = false, scope = userScope) {
   return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
+    const request = indexedDB.open(!legacy && scope ? `${DATABASE_NAME}-user-${scope}` : DATABASE_NAME, DATABASE_VERSION)
 
     request.onupgradeneeded = () => {
       const database = request.result
+      for (const store of [OUTBOX_STORE, KV_STORE]) if (!database.objectStoreNames.contains(store)) database.createObjectStore(store, { keyPath: 'id' })
 
       if (!database.objectStoreNames.contains(ORDERS_STORE)) {
         const orders = database.createObjectStore(ORDERS_STORE, { keyPath: 'id' })

@@ -1,3 +1,4 @@
+import { getStorageScope } from '../storage/database'
 import { emptyOrderSummary, formatRecognizedOrderText, isValidGtin, validateOrderItem, type RecognizedOrderItem, type RecognizedOrderSummary } from '../recognition/ocr'
 import { saveOrderProducts } from '../products/storage'
 import { saveOrder, type SavedOrder } from './storage'
@@ -161,9 +162,9 @@ export async function importOrderDocument(document: OrderDocument, sourceFileNam
   const items = document.order.items.map(toRecognizedItem)
   const savedOrder = await saveOrder({
     id: crypto.randomUUID(), orderNumber: document.order.orderNumber, notes: document.order.notes ?? '',
-    summary: document.order.summary ?? emptyOrderSummary(), items, rawText: '', sourceFileName, sourceFileNames: [sourceFileName],
+    source: 'json', summary: document.order.summary ?? emptyOrderSummary(), items, rawText: '', sourceFileName, sourceFileNames: [sourceFileName],
   })
-  const products = await saveOrderProducts(items, { overwriteExisting: false, newProductVerification: 'verified', source: 'imported' })
+  const products = getStorageScope() ? { saved: 0, matchedExisting: 0, incomplete: 0, conflicts: 0 } : await saveOrderProducts(items, { overwriteExisting: false, newProductVerification: 'verified', source: 'imported' })
   return { savedOrder, products }
 }
 

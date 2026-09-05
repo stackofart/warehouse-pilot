@@ -1,4 +1,5 @@
 import type { Product, ProductInput } from './storage'
+import { ApiError } from '../storage/apiClient'
 
 export type SharedCatalogProduct = Omit<Product, 'createdAt'> & { createdAt?: string; version?: number }
 
@@ -20,12 +21,12 @@ export type SharedProductImportResult = {
 const IMPORT_BATCH_SIZE = 10
 const API_TIMEOUT_MS = 30_000
 
-export class SharedApiError extends Error {
+export class SharedApiError extends ApiError {
   status: number
   code: string
 
   constructor(message: string, status: number, code = 'api_error') {
-    super(message)
+    super(message, status, code)
     this.name = 'SharedApiError'
     this.status = status
     this.code = code
@@ -39,6 +40,7 @@ async function apiJson<T>(path: string, init?: RequestInit, fetcher: typeof fetc
   try {
     response = await fetcher(path, {
       ...init,
+      cache: 'no-store',
       signal: controller.signal,
       headers: { accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}), ...init?.headers },
     })
@@ -52,6 +54,7 @@ async function apiJson<T>(path: string, init?: RequestInit, fetcher: typeof fetc
   }
   const body = await response.json().catch(() => null)
   if (!response.ok) {
+    if (typeof window !== 'undefined' && [401, 403].includes(response.status)) window.dispatchEvent(new Event('warehouse:access-expired'))
     const fallback = response.status === 413
       ? 'Пакет товаров слишком большой для отправки. Попробуйте повторить перенос.'
       : 'Сервис общей базы вернул ошибку.'
@@ -66,6 +69,11 @@ export async function searchSharedCatalog(query: string, fetcher: typeof fetch =
 }
 
 export async function matchSharedProducts(items: Array<{ barcode?: string; sku?: string }>, fetcher: typeof fetch = fetch): Promise<Product[]> {
+  if (items.length > 100) {
+    const found = new Map<string, Product>()
+    for (let offset = 0; offset < items.length; offset += 100) for (const product of await matchSharedProducts(items.slice(offset, offset + 100), fetcher)) found.set(product.id, product)
+    return [...found.values()]
+  }
   const result = await apiJson<{ items: SharedCatalogProduct[] }>('/api/catalog/match', {
     method: 'POST',
     body: JSON.stringify({ items }),
@@ -107,6 +115,11 @@ export function productForSharedImport(product: ProductInput) {
     verificationStatus: product.verificationStatus,
     verificationSource: product.verificationSource,
     verifiedAt: product.verifiedAt,
+    technicalDataSource: product.technicalDataSource,
+    technicalVerificationStatus: product.technicalVerificationStatus,
+    identificationNotes: product.identificationNotes,
+    packagingColor: product.packagingColor,
+    variant: product.variant,
   }
 }
 
@@ -127,6 +140,18 @@ export async function importSharedProducts(
     result.updated += imported.updated
     result.skipped += imported.skipped
     result.errors.push(...imported.errors.map((error) => ({ ...error, index: error.index + offset })))
+    for (let index = 0; index < batch.length; index++) {
+      const source = products[offset + index]
+      if (!source.imageDataUrl || imported.errors.some(error => error.index === index)) continue
+      try {
+        const [target] = await matchSharedProducts([source], fetcher)
+        if (target && !target.imageUrl) {
+          const image = await (await fetch(source.imageDataUrl)).blob()
+          const { uploadProductImage } = await import('./images')
+          await uploadProductImage(target, image, fetcher)
+        }
+      } catch (reason) { result.errors.push({ index: offset + index, error: `Текст сохранён, фото не перенесено: ${reason instanceof Error ? reason.message : 'ошибка R2'}` }) }
+    }
     onProgress?.(Math.min(offset + batch.length, products.length), products.length)
   }
 

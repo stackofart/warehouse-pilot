@@ -3,6 +3,7 @@
   "compatibility_date": "2026-08-22",
   "main": "./worker/index.js",
   "keep_vars": true,
+  "r2_buckets": [{ "binding": "PRODUCT_IMAGES", "bucket_name": "warehouse-pilot-product-images" }],
   "d1_databases": [
     {
       "binding": "DB",

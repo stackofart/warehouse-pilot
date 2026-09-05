@@ -1,7 +1,7 @@
 import { ShieldCheck, UserRound } from 'lucide-react'
 import type { AuthenticatedUser } from './session'
 
-const roleLabels = { admin: 'Администратор', picker: 'Сборщик' } as const
+const roleLabels = { admin: 'Администратор', picker: 'Сборщик', replenisher: 'Водитель погрузчика' } as const
 
 function initials(user: AuthenticatedUser) {
   const parts = user.name.trim().split(/\s+/).filter(Boolean)

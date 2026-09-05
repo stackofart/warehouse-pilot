@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 .wrangler
+.backups/
 *.local
 .dev.vars*
 !.dev.vars.example

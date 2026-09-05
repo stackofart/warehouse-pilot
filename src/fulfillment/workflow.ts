@@ -48,6 +48,11 @@ export type FulfillmentEvent = {
 }
 
 export type FulfillmentSession = {
+  serverVersion?: number
+  localRevision?: number
+  actorId?: string
+  syncStatus?: 'synced' | 'pending' | 'conflict'
+  syncError?: string
   orderId: string
   /** Fast mode records exceptions and accepts untouched rows together on completion. */
   mode: 'route' | 'fast'
@@ -156,7 +161,7 @@ export function updateFulfillmentItem(session: FulfillmentSession, row: number, 
     items: {
       ...session.items,
       [key]: status === 'pending'
-        ? { status, updatedAt: null }
+        ? { ...session.items[key], status, updatedAt: null }
         : { ...session.items[key], status, updatedAt: now },
     },
     events: withEvent(session, {
@@ -175,7 +180,8 @@ export function updateFulfillmentItemNote(session: FulfillmentSession, row: numb
   assertSessionIsActive(session)
   const note = rawNote.trim().slice(0, 500)
   const previous = session.items[key]
-  const status = note ? 'checking' : previous.status === 'checking' ? 'pending' : previous.status
+  // A location/damage report is independent from whether the product was picked.
+  const status = previous.status
   return {
     ...session,
     updatedAt: now,
@@ -496,7 +502,7 @@ export function completeFastFulfillmentSession(session: FulfillmentSession, now 
     .filter(([, item]) => item.status === 'pending')
     .map(([row]) => Number(row))
   const items = { ...session.items }
-  rows.forEach((row) => { items[String(row)] = { status: 'picked', updatedAt: now } })
+  rows.forEach((row) => { items[String(row)] = { ...items[String(row)], status: 'picked', updatedAt: now } })
   const accepted = rows.length
     ? { ...session, mode: 'fast' as const, items, updatedAt: now, events: withEvent(session, { type: 'items_bulk_picked', at: now, rows }) }
     : { ...session, mode: 'fast' as const, items, updatedAt: now }

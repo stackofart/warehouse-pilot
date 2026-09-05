@@ -1,4 +1,9 @@
 import { authenticateRequest, publicUser, requireAdmin } from './auth.js'
+import { handleOrdersRequest } from './orders.js'
+import { handlePalletsRequest } from './pallets.js'
+import { handleReportsRequest } from './reports.js'
+import { handleProductDetails } from './productDetails.js'
+import { checkAiQuota } from './quotas.js'
 import { handleCatalogRequest } from './catalog.js'
 import { jsonResponse, methodNotAllowed } from './http.js'
 import { handleUsersRequest } from './users.js'
@@ -279,6 +284,7 @@ async function recognizeOrder(request, env) {
   let openAIResponse
   try {
     openAIResponse = await fetch(OPENAI_RESPONSES_URL, {
+      signal: AbortSignal.timeout(90000),
       method: 'POST',
       headers: {
         authorization: `Bearer ${env.OPENAI_API_KEY}`,
@@ -370,6 +376,7 @@ async function researchProduct(request, env) {
   let openAIResponse
   try {
     openAIResponse = await fetch(OPENAI_RESPONSES_URL, {
+      signal: AbortSignal.timeout(90000),
       method: 'POST',
       headers: {
         authorization: `Bearer ${env.OPENAI_API_KEY}`,
@@ -433,13 +440,21 @@ async function researchProduct(request, env) {
 
 export default {
   async fetch(request, env, ctx) {
+    try {
     const url = new URL(request.url)
 
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
+    const origin = request.headers.get('origin')
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && origin && origin !== url.origin) return jsonResponse({ error: 'Изменения разрешены только из этого приложения.', code: 'invalid_origin' }, 403)
 
     const authenticated = await authenticateRequest(request, env, ctx)
     if (authenticated.response) return authenticated.response
     const user = authenticated.user
+
+    for (const handler of [handleOrdersRequest, handlePalletsRequest, handleReportsRequest, handleProductDetails]) {
+      const result = await handler(request, env, user)
+      if (result) return result
+    }
 
     if (url.pathname === '/api/me') {
       if (request.method !== 'GET') return methodNotAllowed(['GET'])
@@ -457,19 +472,26 @@ export default {
     }
 
     if (url.pathname === '/api/recognize-order') {
+      const forbidden = requireAdmin(user)
+      if (forbidden) return forbidden
       if (request.method !== 'POST') return methodNotAllowed(['POST'])
-      return recognizeOrder(request, env)
+      const quota = await checkAiQuota(env, user)
+      return quota || await recognizeOrder(request, env)
     }
 
     if (url.pathname === '/api/research-product') {
       const forbidden = requireAdmin(user)
       if (forbidden) return forbidden
       if (request.method !== 'POST') return methodNotAllowed(['POST'])
-      return researchProduct(request, env)
+      const quota = await checkAiQuota(env, user)
+      return quota || await researchProduct(request, env)
     }
 
     return jsonResponse({ error: 'API-маршрут не найден.', code: 'not_found' }, 404)
+    } catch (error) {
+      const requestId = crypto.randomUUID()
+      console.error('API failure', { requestId, path: new URL(request.url).pathname, message: error.message })
+      return jsonResponse({ error: 'Сервис временно недоступен. Проверьте миграции D1 и журнал Worker.', code: 'service_unavailable', requestId }, 503)
+    }
   },
 }
-
-export { extractionInstructions, findOutputText, orderSchema, productResearchInstructions, productResearchSchema }

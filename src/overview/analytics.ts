@@ -150,6 +150,7 @@ export function calculateOverviewAnalytics(
   const dailyRows = new Map<string, DailyAnalytics>()
 
   for (const order of selectedOrders) {
+    const orderLookup = order.productSnapshots?.length ? buildProductLookup(order.productSnapshots) : lookup
     const session = sessionByOrder.get(order.id)
     const timestamp = itemTimestamp(order, session)
     const key = dayKey(timestamp)
@@ -174,7 +175,7 @@ export function calculateOverviewAnalytics(
     for (const item of order.items) {
       const itemBoxes = numeric(item.boxCount)
       const itemUnits = numeric(item.quantity)
-      const product = findProduct(item, lookup)
+      const product = findProduct(item, orderLookup)
       const weight = itemWeight(item, product)
       orderBoxes += itemBoxes
       boxes += itemBoxes
@@ -243,6 +244,7 @@ export function calculateOverviewAnalytics(
   for (const session of selectedSessions) {
     const order = orderById.get(session.orderId)
     if (!order) continue
+    const orderLookup = order.productSnapshots?.length ? buildProductLookup(order.productSnapshots) : lookup
     if (session.status === 'completed' && session.completedAt) {
       completedOrders += 1
       const orderDuration = getFulfillmentActiveDurationBetween(session, session.startedAt, session.completedAt)
@@ -259,6 +261,12 @@ export function calculateOverviewAnalytics(
     let sessionTravelMs = 0
     let carriedWeight = 0
     let lastAddress = session.startAddress
+    // Picked mass is known from quantities even when no route checkpoints exist.
+    for (const item of order.items) {
+      if (session.items?.[String(item.row)]?.status === 'picked') {
+        handledWeightKg += itemWeight(item, findProduct(item, orderLookup))
+      }
+    }
     for (const [address, stop] of orderedStops) {
       const transitionDistance = stop.distanceFromPreviousMeters ?? 0
       totalDistanceMeters += transitionDistance
@@ -278,12 +286,11 @@ export function calculateOverviewAnalytics(
       const stopItems = order.items.filter((item) => normalizeAddress(item.address) === address)
       const allocationBoxes = stopItems.reduce((total, item) => total + (numeric(item.boxCount) || 1), 0)
       for (const item of stopItems) {
-        const product = findProduct(item, lookup)
+        const product = findProduct(item, orderLookup)
         const weight = itemWeight(item, product)
         const status = session.items?.[String(item.row)]?.status
         if (status === 'picked') {
           carriedWeight += weight
-          handledWeightKg += weight
         }
         const aggregate = productRows.get(itemKey(item))
         if (aggregate && stopCollectionMs > 0) {
@@ -293,7 +300,7 @@ export function calculateOverviewAnalytics(
       }
     }
 
-    if (session.status === 'completed' && lastAddress && session.finishAddress) {
+    if (session.mode !== 'fast' && orderedStops.length && session.status === 'completed' && lastAddress && session.finishAddress) {
       const finalLeg = distance(lastAddress, session.finishAddress)
       if (finalLeg.status === 'resolved') {
         totalDistanceMeters += finalLeg.distance

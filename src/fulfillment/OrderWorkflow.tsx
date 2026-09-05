@@ -29,7 +29,10 @@ import {
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { listOrders, type SavedOrder } from '../orders/storage'
-import { isProductVerified, listProducts, type Product } from '../products/storage'
+import { isProductVerified, type Product } from '../products/storage'
+import { productsForOrders } from '../products/catalogRepository'
+import { getSyncedSession, flushSessions } from './sync'
+import { getReports, sendReport, reportStatus, type Report } from '../reports/api'
 import type { RecognizedOrderItem } from '../recognition/ocr'
 import { optimizeOrderRoute } from '../routing/optimizer'
 import { buildWarehouseGraph } from '../warehouse/graph'
@@ -270,6 +273,9 @@ export function OrderWorkflow() {
   const [fastSort, setFastSort] = useState<FastSort>('sheet')
   const [fastActionRow, setFastActionRow] = useState<number | null>(null)
   const [reportDrafts, setReportDrafts] = useState<Record<number, string>>({})
+  const [reportKinds, setReportKinds] = useState<Record<number, Report['kind']>>({})
+  const [reportAddresses, setReportAddresses] = useState<Record<number, string>>({})
+  const [reports, setReports] = useState<Report[]>([])
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -282,7 +288,8 @@ export function OrderWorkflow() {
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
-    Promise.all([listOrders(), listProducts()]).then(([savedOrders, savedProducts]) => {
+    listOrders().then(async savedOrders => {
+      const savedProducts = await productsForOrders(savedOrders)
       setOrders(savedOrders)
       setProducts(savedProducts)
       if (savedOrders[0]) setSelectedId((current) => current || savedOrders[0].id)
@@ -293,6 +300,14 @@ export function OrderWorkflow() {
   }, [])
 
   const order = orders.find((candidate) => candidate.id === selectedId) ?? orders[0]
+
+  useEffect(() => {
+    if (!order) return
+    let cancelled = false
+    const refresh = async () => { try { const [alerts, cards] = await Promise.all([getReports(order.id), productsForOrders([order])]); if (!cancelled) { setReports(alerts); setProducts(previous => [...new Map([...previous, ...cards].map(card => [card.id, card])).values()]) } } catch { /* Existing alerts stay visible during a connection outage. */ } }
+    void refresh(); const timer = setInterval(() => void refresh(), 30000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [order])
 
   useEffect(() => {
     let cancelled = false
@@ -319,9 +334,10 @@ export function OrderWorkflow() {
       }
       const reconciled = reconcileFulfillmentSession(saved, order.items.map((item) => item.row), uniqueOrderAddresses(order))
       setSession(reconciled)
+      setWorkflowMode(reconciled.mode)
       setStartAddress(reconciled.startAddress)
       setFinishAddress(reconciled.finishAddress)
-      if (reconciled !== saved) await saveFulfillmentSession(reconciled)
+      if (reconciled !== saved) setSession(await saveFulfillmentSession(reconciled))
     }).catch((reason) => {
       console.error(reason)
       if (!cancelled) setError('Не удалось загрузить прогресс заказа')
@@ -357,19 +373,19 @@ export function OrderWorkflow() {
   }, [])
   const productsByBarcode = useMemo(() => new Map(products.filter((product) => product.barcode).map((product) => [product.barcode.replace(/\D/g, ''), product])), [products])
   const productsBySku = useMemo(() => new Map(products.filter((product) => product.sku).map((product) => [product.sku.replace(/\D/g, ''), product])), [products])
-  const route = useMemo(() => order ? buildWorkflowStops(order, session, startAddress, finishAddress) : null, [order, session, startAddress, finishAddress])
+  const route = useMemo(() => order && workflowMode === 'route' ? buildWorkflowStops(order, session, startAddress, finishAddress) : null, [order, session, startAddress, finishAddress, workflowMode])
   const progress = getFulfillmentProgress(session)
-  const fastPendingCount = Object.values(session?.items ?? {}).filter((item) => item.status === 'pending').length
+  const fastPendingCount = session ? Object.values(session.items).filter((item) => item.status === 'pending').length : order?.items.length || 0
   const firstPendingStopIndex = route?.stops.findIndex((stop) => (session?.stops[stop.address]?.status ?? 'pending') !== 'completed') ?? -1
   const routeRows = useMemo(() => chunkStops(route?.stops ?? []), [route])
   const searchEntries = useMemo(() => {
     const entries: FulfillmentSearchEntry[] = []
-    for (const stop of route?.stops ?? []) {
+    for (const stop of route?.stops ?? order?.items.map(item => ({ address: item.address, items: [item] })) ?? []) {
       for (const item of stop.items) {
         const product = productsByBarcode.get(item.barcode.replace(/\D/g, '')) ?? productsBySku.get(item.sku.replace(/\D/g, ''))
         entries.push({
           row: item.row,
-          address: stop.address,
+          address: workflowMode === 'fast' ? product?.location || stop.address : stop.address,
           name: product?.name || item.description || `Позиция ${item.row}`,
           barcode: item.barcode || product?.barcode || '',
           sku: item.sku || product?.sku || '',
@@ -378,9 +394,13 @@ export function OrderWorkflow() {
       }
     }
     return entries
-  }, [productsByBarcode, productsBySku, route, session])
+  }, [productsByBarcode, productsBySku, route, session, order, workflowMode])
   const searchResults = useMemo(() => searchFulfillmentEntries(searchEntries, searchQuery), [searchEntries, searchQuery])
   const visibleSearchResults = searchResults.slice(0, 8)
+  const issueRows = useMemo(() => new Set((order?.items || []).filter(item => {
+    const state = session?.items[String(item.row)]
+    return state?.status === 'missing' || state?.status === 'checking' || Boolean(state?.note) || reports.some(report => (Boolean(item.sku) && report.sku === item.sku) || (Boolean(item.barcode) && report.barcode === item.barcode))
+  }).map(item => item.row)), [order, session, reports])
   const fastItems = useMemo(() => {
     if (!order) return []
     const entries = order.items.map((item, sheetIndex) => {
@@ -390,13 +410,13 @@ export function OrderWorkflow() {
       return { item, product, status, name, sheetIndex, family: productFamily(product, name) }
     })
     if (fastSort === 'family') entries.sort((left, right) => left.family.key.localeCompare(right.family.key) || left.sheetIndex - right.sheetIndex)
-    return entries.filter(({ status }) => {
+    return entries.filter(({ status, item }) => {
       if (fastFilter === 'pending') return status === 'pending'
-      if (fastFilter === 'issues') return status === 'checking' || status === 'missing'
+      if (fastFilter === 'issues') return issueRows.has(item.row)
       if (fastFilter === 'picked') return status === 'picked'
       return true
     })
-  }, [fastFilter, fastSort, order, productsByBarcode, productsBySku, session])
+  }, [fastFilter, fastSort, order, productsByBarcode, productsBySku, session, issueRows])
 
   const selectOrder = (id: string) => {
     setSelectedId(id)
@@ -409,12 +429,14 @@ export function OrderWorkflow() {
     setSession(next)
     setIsSaving(true)
     try {
-      await saveFulfillmentSession(next)
+      setSession(await saveFulfillmentSession(next))
       setNow(Date.now())
+      return true
     } catch (reason) {
       console.error(reason)
       setSession(previous)
-      setError(failureMessage)
+      setError(reason instanceof Error ? reason.message : failureMessage)
+      return false
     } finally {
       setIsSaving(false)
     }
@@ -472,7 +494,14 @@ export function OrderWorkflow() {
     setError('')
     const currentStatus = session.items[String(row)]?.status ?? 'pending'
     const nextStatus = currentStatus === status ? 'pending' : status
-    await persistSession(updateFulfillmentItem(session, row, nextStatus), session, 'Не удалось сохранить отметку позиции')
+    if (!await persistSession(updateFulfillmentItem(session, row, nextStatus), session, 'Не удалось сохранить отметку позиции')) return
+    if (nextStatus === 'missing' && order) {
+      try {
+        const pending = await sendReport({ id: crypto.randomUUID(), orderId: order.id, row, kind: 'missing', note: 'Нет товара на подборе. Проверьте резерв.' })
+        if (pending) setError('Сообщение сохранено на устройстве и будет отправлено при восстановлении сети.')
+        else setReports(await getReports(order.id))
+      } catch (reason) { setError(String(reason)) }
+    }
     setFastActionRow(null)
   }
 
@@ -484,7 +513,14 @@ export function OrderWorkflow() {
       return
     }
     setError('')
-    await persistSession(updateFulfillmentItemNote(session, row, note), session, 'Не удалось сохранить комментарий')
+    if (!await persistSession(updateFulfillmentItemNote(session, row, note), session, 'Не удалось сохранить комментарий')) return
+    if (order) {
+      try {
+        const pending = await sendReport({ id: crypto.randomUUID(), orderId: order.id, row, kind: reportKinds[row] || 'comment', note, suggestedAddress: reportAddresses[row] })
+        if (pending) setError('Комментарий сохранён локально. Другие увидят его после синхронизации.')
+        else setReports(await getReports(order.id))
+      } catch (reason) { setError(String(reason)); return }
+    }
     setFastActionRow(null)
   }
 
@@ -510,8 +546,7 @@ export function OrderWorkflow() {
     setIsSaving(true)
     try {
       const next = workflowMode === 'fast' ? completeFastFulfillmentSession(session) : completeFulfillmentSession(session)
-      await saveFulfillmentSession(next)
-      setSession(next)
+      setSession(await saveFulfillmentSession(next))
       setNow(Date.now())
     } catch (reason) {
       console.error(reason)
@@ -554,10 +589,12 @@ export function OrderWorkflow() {
   }
 
   if (isLoading) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><p>Открываем заказ…</p></div></div>
-  if (!order) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><strong>Нет сохранённых заказов</strong><a className="primary-button" href="#new-order">Создать заказ</a></div></div>
+  if (!order) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><strong>Нет сохранённых заказов</strong><a className="primary-button" href="#orders">Создать заказ</a></div></div>
 
   return (
-    <div className="page workflow-page">
+    <div className={`page workflow-page ${workflowMode === 'fast' && session ? 'active-fast-work' : ''}`}>
+      {workflowMode === 'fast' && session && <nav className="compact-work-links" aria-label="Быстрые действия заказа"><a href="#orders">← Заказы</a><a href={`#pallet/${encodeURIComponent(order.id)}`}>Паллета</a><a href="#work-finish" onClick={event => { event.preventDefault(); document.getElementById('work-finish')?.scrollIntoView({ block: 'end', behavior: 'smooth' }) }}>К завершению ↓</a></nav>}
+      {session?.syncStatus && session.syncStatus !== 'synced' && <div className="operations-sync" role="status"><span>{session.syncStatus === 'conflict' ? session.syncError || 'Конфликт синхронизации' : 'Сохранено на устройстве · ожидает отправки'}</span><button onClick={() => void flushSessions().then(async () => setSession(await getFulfillmentSession(order.id) || null))}>Синхронизировать</button>{session.syncStatus === 'conflict' && <button onClick={() => { if (confirm('Заменить локальный прогресс серверной версией? Несинхронизированные отметки будут удалены.')) void getSyncedSession(order.id, true).then(value => setSession(value || null)).catch(reason => setError(String(reason))) }}>Принять серверную версию</button>}</div>}
       <div className="page-heading workflow-heading">
         <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>{workflowMode === 'fast' ? 'Быстрая сборка заказа' : 'Заказ: маршрут и сборка'}</h1><p>{workflowMode === 'fast' ? 'Отмечайте только исключения. Остальные позиции можно подтвердить вместе при завершении заказа.' : 'Отмечайте результат по товару — прибытие и остановки фиксируются автоматически.'}</p></div>
         <label className="order-selector"><span>Заказ</span><select aria-label="Заказ для комплектации" value={order.id} onChange={(event) => selectOrder(event.target.value)}>{orders.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.orderNumber || 'Без номера'}</option>)}</select></label>
@@ -572,7 +609,7 @@ export function OrderWorkflow() {
       </nav>
 
       <section className="workflow-mode-switch" aria-label="Режим комплектации">
-        <div><button type="button" className={workflowMode === 'fast' ? 'active' : ''} aria-pressed={workflowMode === 'fast'} onClick={() => setWorkflowMode('fast')}><PackageCheck size={16} />Быстрый режим</button><button type="button" className={workflowMode === 'route' ? 'active' : ''} aria-pressed={workflowMode === 'route'} onClick={() => setWorkflowMode('route')}><Route size={16} />С маршрутом</button></div>
+        <div><button type="button" className={workflowMode === 'fast' ? 'active' : ''} aria-pressed={workflowMode === 'fast'} disabled={Boolean(session)} onClick={() => setWorkflowMode('fast')}><PackageCheck size={16} />Быстрый режим</button><button type="button" className={workflowMode === 'route' ? 'active' : ''} aria-pressed={workflowMode === 'route'} disabled={Boolean(session)} onClick={() => setWorkflowMode('route')}><Route size={16} />С маршрутом</button></div>
         <p>{workflowMode === 'fast' ? 'Основной сценарий для телефона: полный список остаётся на месте, фиксируются только проблемы.' : 'Экспериментальный старый сценарий с остановками, расстояниями и картой маршрута.'}</p>
       </section>
 
@@ -598,7 +635,7 @@ export function OrderWorkflow() {
       </section>
 
       {workflowMode === 'fast' && session && <section className={`mobile-fast-summary ${session.status}`}>
-        <div><small>{order.orderNumber || 'Заказ без номера'}</small><b>{order.items.length} позиций · {progress.picked} собрано · {progress.checking + progress.missing} требуют проверки</b></div>
+        <div><small>{order.orderNumber || 'Заказ без номера'} · {session.status === 'paused' ? 'Пауза' : session.status === 'completed' ? 'Завершён' : formatMilliseconds(getFulfillmentActiveDuration(session, now))}</small><b>{order.items.length} позиций · {progress.picked} собрано · {issueRows.size} с замечаниями</b></div>
         {session.status !== 'completed' && <button type="button" disabled={isSaving} aria-label={session.status === 'paused' ? 'Продолжить заказ' : 'Поставить заказ на паузу'} onClick={() => void toggleOrderPause()}>{session.status === 'paused' ? <Play size={18} /> : <Pause size={18} />}</button>}
       </section>}
 
@@ -689,7 +726,7 @@ export function OrderWorkflow() {
           <div className="fast-filter-tabs" role="group" aria-label="Фильтр позиций">
             <button type="button" className={fastFilter === 'all' ? 'active' : ''} onClick={() => setFastFilter('all')}>Все <b>{order.items.length}</b></button>
             <button type="button" className={fastFilter === 'pending' ? 'active' : ''} onClick={() => setFastFilter('pending')}>Не отмечены <b>{fastPendingCount}</b></button>
-            <button type="button" className={fastFilter === 'issues' ? 'active issue' : ''} onClick={() => setFastFilter('issues')}>Проблемы <b>{progress.checking + progress.missing}</b></button>
+            <button type="button" className={fastFilter === 'issues' ? 'active issue' : ''} onClick={() => setFastFilter('issues')}>Замечания <b>{issueRows.size}</b></button>
             <button type="button" className={fastFilter === 'picked' ? 'active' : ''} onClick={() => setFastFilter('picked')}>Собрано <b>{progress.picked}</b></button>
           </div>
           <label className="fast-sort-select"><span>Порядок</span><select value={fastSort} onChange={(event) => setFastSort(event.target.value as FastSort)}><option value="sheet">Как в листе</option><option value="family">Товарные группы</option></select></label>
@@ -702,7 +739,7 @@ export function OrderWorkflow() {
             const actionOpen = fastActionRow === item.row
             const canHandle = Boolean(session) && session!.status === 'in-progress' && !isSaving
             const verification = item.productVerification ?? (product && isProductVerified(product) ? 'verified' : 'unverified')
-            const statusLabel = status === 'picked' ? 'Собрано' : status === 'checking' ? 'Сообщено' : status === 'missing' ? 'Нет товара' : 'Сообщить'
+            const statusLabel = status === 'picked' ? 'Собрано' : status === 'checking' ? 'Идёт проверка' : status === 'missing' ? 'Нет товара' : 'Сообщить'
             const itemNote = session?.items[String(item.row)]?.note ?? ''
             const showFamily = fastSort === 'family' && (index === 0 || fastItems[index - 1].family.key !== family.key)
             return <Fragment key={item.row}>
@@ -712,12 +749,14 @@ export function OrderWorkflow() {
                 <button className="fast-row-main" type="button" aria-expanded={expanded} onClick={() => toggleRowDetails(item.row)}>
                   <b dir="auto">{name}</b>
                   <span className="fast-row-meta"><strong><MapPin size={13} />{product?.location || itemAddress(item)}</strong><em className="fast-row-quantity"><b>{item.quantity || '?'}</b> шт. · {item.boxCount || '?'} кор.</em><small className="fast-row-barcode"><Barcode size={13} />{item.barcode || product?.barcode || 'без штрихкода'}</small></span>
-                  {itemNote && <span className="fast-row-report-note"><MessageSquare size={13} />{itemNote}</span>}
+                  {itemNote && !reports.some(report => ((Boolean(item.sku) && report.sku === item.sku) || (Boolean(item.barcode) && report.barcode === item.barcode)) && report.note === itemNote) && <span className="fast-row-report-note"><MessageSquare size={13} />{itemNote}</span>}
+                  {reports.filter(report => (Boolean(item.sku) && report.sku === item.sku) || (Boolean(item.barcode) && report.barcode === item.barcode)).map(report => <span className="operations-report-alert" key={report.id}>{reportStatus[report.status]} · {report.suggestedAddress ? 'Возможный адрес ' + report.suggestedAddress + ' · ' : ''}{report.note}</span>)}
                 </button>
                 <button className={`fast-row-status ${status}`} type="button" title={statusLabel} aria-label={`${statusLabel}: ${name}`} disabled={!canHandle} aria-expanded={actionOpen} onClick={() => setFastActionRow((current) => current === item.row ? null : item.row)}>{status === 'picked' ? <Check size={16} /> : status === 'checking' ? <ShieldCheck size={16} /> : status === 'missing' ? <PackageX size={16} /> : <AlertTriangle size={16} />}<span>{statusLabel}</span><ChevronDown size={14} /></button>
 
                 {expanded && <div className="workflow-item-details fast-row-details">
-                  {product?.imageDataUrl && <img src={product.imageDataUrl} alt={name} />}
+                  {(product?.imageUrl || product?.imageDataUrl) && <img src={product.imageUrl || product.imageDataUrl} alt={name} />}
+                  {(product?.variant || product?.packagingColor || product?.identificationNotes) && <p><b>{product.variant} {product.packagingColor}</b> {product.identificationNotes}</p>}
                   <div><span><small>Штрихкод</small><b>{item.barcode || product?.barcode || '—'}</b></span><span><small>מק״ט</small><b>{item.sku || product?.sku || '—'}</b></span><span><small>Адрес</small><b>{product?.location || itemAddress(item)}</b></span><span><small>В коробке</small><b>{product?.unitsPerBox || item.unitsPerBox || '—'} шт.</b></span><span><small>Коробка</small><b>{formatPhysicalSpec(product?.boxSpec)}</b></span><span><small>Единица</small><b>{formatPhysicalSpec(product?.itemSpec)}</b></span><span><small>Проверка</small><b>{verification === 'verified' ? 'Товар проверен' : 'Нужна проверка карточки'}</b></span></div>
                   {product?.description && <p>{product.description}</p>}
                   {!product && <p>Подробные технические данные появятся после привязки позиции к общей базе товаров.</p>}
@@ -725,6 +764,9 @@ export function OrderWorkflow() {
 
                 {actionOpen && <div className="fast-row-actions">
                   <span>Сообщить о позиции</span>
+                  <select aria-label="Тип сообщения" value={reportKinds[item.row] || 'comment'} onChange={event => setReportKinds(current => ({ ...current, [item.row]: event.target.value as Report['kind'] }))}><option value="comment">Комментарий</option><option value="moved">Товар на другом месте</option><option value="damaged">Упаковка повреждена</option></select>
+                  {reportKinds[item.row] === 'moved' && <input aria-label="Фактический адрес товара" placeholder="Новый адрес, например 24.F" value={reportAddresses[item.row] || ''} onChange={event => setReportAddresses(current => ({ ...current, [item.row]: event.target.value }))} />}
+                  {status === 'checking' && <button disabled={!canHandle} onClick={() => void setFastItemStatus(item.row, 'picked')}>Проверено, собрано</button>}
                   <button type="button" className="missing-button" disabled={!canHandle} aria-pressed={status === 'missing'} onClick={() => void setFastItemStatus(item.row, 'missing')}><PackageX size={16} />Товар отсутствует</button>
                   <label className="fast-report-comment"><span>Комментарий</span><textarea value={reportDrafts[item.row] ?? itemNote} maxLength={500} placeholder="Например: упаковка повреждена или товар на другой позиции" onChange={(event) => setReportDrafts((current) => ({ ...current, [item.row]: event.target.value }))} /></label>
                   <button type="button" className="checking-button" disabled={!canHandle || !(reportDrafts[item.row] ?? itemNote).trim()} onClick={() => void saveFastItemComment(item.row)}><MessageSquare size={16} />Сохранить комментарий</button>
@@ -736,7 +778,7 @@ export function OrderWorkflow() {
           }) : <div className="fast-picking-empty"><Search size={25} /><b>В этом фильтре нет позиций</b><button type="button" onClick={() => setFastFilter('all')}>Показать весь заказ</button></div>}
         </div>
 
-        {session?.status === 'in-progress' && <footer className="fast-complete-bar"><div><b>{fastPendingCount ? `${fastPendingCount} позиций без замечаний` : 'Все позиции отмечены'}</b><span>{progress.checking ? `Нужно завершить проверку: ${progress.checking}` : fastPendingCount ? 'При завершении они будут записаны как собранные.' : 'Заказ готов к завершению.'}</span></div><button className="primary-button" type="button" disabled={isSaving || progress.checking > 0} onClick={() => void finishOrder()}><Flag size={18} />Завершить заказ</button></footer>}
+        {session?.status === 'in-progress' && <footer id="work-finish" className="fast-complete-bar"><div><b>{fastPendingCount ? `${fastPendingCount} позиций ещё не отмечено` : 'Все позиции отмечены'}</b><span>{progress.checking ? `Нужно завершить проверку: ${progress.checking}` : fastPendingCount ? 'При завершении они будут записаны как собранные.' : 'Заказ готов к завершению.'}</span></div><button className="primary-button" type="button" disabled={isSaving || progress.checking > 0} onClick={() => void finishOrder()}><Flag size={18} />Завершить заказ</button></footer>}
       </section>}
 
       {workflowMode === 'route' && route?.routeWarning && <div className="optimization-warning workflow-route-warning"><AlertTriangle size={17} /><span>{route.routeWarning} Ручные точки остаются в списке.</span></div>}

@@ -1,6 +1,8 @@
 import { AlertTriangle, Barcode, Boxes, ChevronDown, ChevronUp, Database, FileJson, ImageOff, MapPin, RefreshCw, Search, ShieldCheck, Upload } from 'lucide-react'
 import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { listProducts } from '../products/storage'
+import { type Product } from '../products/storage'
+import { openDatabase, PRODUCTS_STORE, requestToPromise } from '../storage/database'
+import { ProductEditor } from '../products/ProductEditor'
 import { parseProductDocument } from '../products/transfer'
 import { createSharedProduct, getAdminProductPage, importSharedProducts, type SharedProductImportResult, type SharedProductPage } from '../products/sharedApi'
 
@@ -24,16 +26,17 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
   const [query, setQuery] = useState('')
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState('')
+  const [importErrors, setImportErrors] = useState<SharedProductImportResult['errors']>([])
   const [importing, setImporting] = useState(false)
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null)
   const [expandedProductId, setExpandedProductId] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState({ name: '', location: '', barcode: '', sku: '', description: '', unitsPerBox: '' })
 
-  const load = useCallback(async (value = '') => {
+  const load = useCallback(async (value = '', offset = 0) => {
     setState('loading')
     try {
-      setPage(await getAdminProductPage(value))
+      setPage(await getAdminProductPage(value, offset))
       setState('ready')
     } catch (reason) {
       setState('error')
@@ -45,6 +48,7 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
 
   const search = (event: FormEvent) => { event.preventDefault(); void load(query) }
   const importSummary = (result: SharedProductImportResult) => {
+    setImportErrors(result.errors)
     const errorDetails = result.errors.length
       ? ` Не перенесено: ${result.errors.length}. Первая ошибка — строка ${result.errors[0].index + 1}: ${result.errors[0].error}`
       : ''
@@ -57,7 +61,9 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
     setMessage('')
     let refresh = false
     try {
-      const local = await listProducts()
+      const db = await openDatabase(true)
+      let local: Product[]
+      try { local = await requestToPromise(db.transaction(PRODUCTS_STORE).objectStore(PRODUCTS_STORE).getAll()) as Product[] } finally { db.close() }
       if (!local.length) { setMessage('На этом адресе сайта нет локальных товаров. Если база сохранена на другом домене, экспортируйте её там и используйте «Импорт JSON в D1».'); return }
       setImportProgress({ processed: 0, total: local.length })
       const result = await importSharedProducts(local, fetch, (processed, total) => setImportProgress({ processed, total }))
@@ -134,6 +140,7 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
       </details>
       <section className="admin-catalog-summary"><article><small>Всего товаров</small><strong>{page.total}</strong></article><article><small>Требуют проверки</small><strong>{page.unverified}</strong></article><form onSubmit={search}><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск в общей базе" /><button type="submit">Найти</button></form></section>
       {message && <div className="admin-inline-message"><Database size={17} />{message}</div>}
+      {importErrors.length > 0 && <details className="operations-message"><summary>Все конфликты и ошибки переноса ({importErrors.length})</summary><ul>{importErrors.map((entry, index) => <li key={index}>Строка {entry.index + 1}: {entry.error}</li>)}</ul></details>}
       <section className="admin-panel admin-shared-products">
         <header><div><span>КАТАЛОГ D1</span><h2>{query ? `Результаты «${query}»` : 'Последние изменения'}</h2></div><button className="admin-secondary-action" type="button" onClick={() => void load(query)}><RefreshCw size={15} />Обновить</button></header>
         {state === 'loading' ? <div className="admin-empty-compact"><RefreshCw className="spin" size={27} /><b>Загрузка общей базы</b></div>
@@ -151,7 +158,7 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
                 </button>
                 {expanded && <div className="product-directory-details admin-product-directory-details" id={`admin-product-extra-${product.id}`}>
                   <div className="product-detail-content">
-                    <div className="product-detail-image">{product.imageDataUrl ? <img src={product.imageDataUrl} alt={product.name} /> : <span><ImageOff size={27} />Фото будет храниться в R2</span>}</div>
+                    <div className="product-detail-image">{product.imageUrl || product.imageDataUrl ? <img src={product.imageUrl || product.imageDataUrl} alt={product.name} /> : <span><ImageOff size={27} />Фото не загружено</span>}</div>
                     <div className="product-detail-description"><span>Описание</span><p dir="auto">{product.description?.trim() || 'Описание пока не добавлено.'}</p>{(product.brand || product.netContent) && <small>{product.brand && <b dir="auto">{product.brand}</b>}{product.brand && product.netContent ? ' · ' : ''}{product.netContent}</small>}</div>
                   </div>
                   <div className="admin-product-detail-groups">
@@ -161,11 +168,14 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
                     <section><span>Свойства упаковки</span><b>Жёсткость: {product.rigidity ?? '—'} / 5</b><small>Хрупкость: {product.fragility ?? '—'} / 5</small></section>
                   </div>
                   <div className="admin-product-detail-meta"><Boxes size={15} /><span>Источник: {product.verificationSource || 'не указан'}</span><span>Версия {product.version ?? 1}</span><span>Обновлено: {new Date(product.updatedAt).toLocaleString('ru-RU')}</span></div>
+                  <p className="operations-muted">Характеристики: {product.technicalDataSource || 'источник не указан'} · {product.technicalVerificationStatus || 'не подтверждены'}</p>
+                  <ProductEditor key={`${product.id}:${product.version}`} product={product} onSaved={() => { void load(query, page.offset); onChange?.() }} />
                 </div>}
               </article>
             })}</div>
               : <div className="admin-empty-compact"><Database size={27} /><b>В общей базе пока нет товаров</b><span>Перенесите локальные карточки с этого устройства.</span></div>}
       </section>
+      <div className="operations-toolbar"><button disabled={state === 'loading' || page.offset === 0} onClick={() => void load(query, Math.max(0, page.offset - page.limit))}>← Предыдущие</button><span>{page.total ? page.offset + 1 : 0}–{Math.min(page.offset + page.items.length, page.total)} из {page.total}</span><button disabled={state === 'loading' || page.offset + page.limit >= page.total} onClick={() => void load(query, page.offset + page.limit)}>Следующие →</button></div>
     </div>
   )
 }

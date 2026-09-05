@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SavedOrder } from '../orders/storage'
 import type { Product } from '../products/storage'
-import { optimizePallet } from './packing'
+import { allBoxesInspectable, optimizePallet } from './packing'
 import { demoOrders, demoProducts } from './demoData'
 
 function order(items: SavedOrder['items']): SavedOrder {
@@ -17,6 +17,31 @@ function product(sku: string, overrides: Partial<Product> = {}): Product {
 }
 
 describe('pallet packing recommendation', () => {
+  it('propagates load through every supporting layer', () => {
+    const boxes = product('1001', { boxSpec: { lengthCm: 120, widthCm: 80, heightCm: 10, weightKg: 10, maxTopLoadKg: 15 } })
+    const result = optimizePallet(order([item(1, '1001', '3')]), [boxes])
+    expect(result.requiredPallets).toBe(2)
+    for (const pallet of result.pallets) for (const box of pallet.placements) {
+      const actualLoad = pallet.placements.filter(other => other.z > box.z).reduce((sum, other) => sum + other.weightKg, 0)
+      expect(box.loadAboveKg).toBe(actualLoad)
+      expect(actualLoad).toBeLessThanOrEqual(15)
+    }
+  })
+  it('does not silently truncate a 201-box order', () => {
+    const boxes = product('1001', { boxSpec: { lengthCm: 120, widthCm: 80, heightCm: 10, weightKg: 1, maxTopLoadKg: 100 } })
+    const result = optimizePallet(order([item(1, '1001', '201')]), [boxes])
+    expect(result.pallets.reduce((sum, pallet) => sum + pallet.placements.length, 0)).toBe(201)
+    expect(result.issues).toEqual([])
+  })
+  it('keeps each box inspectable and respects height and weight constraints', () => {
+    const boxes = product('1001', { boxSpec: { lengthCm: 40, widthCm: 26, heightCm: 22, weightKg: 5, maxTopLoadKg: 500 } })
+    const result = optimizePallet(order([item(1, '1001', '30')]), [boxes], [], { maxHeightCm: 44, maxWeightKg: 50, inspectable: true })
+    for (const pallet of result.pallets) {
+      expect(allBoxesInspectable(pallet.placements)).toBe(true)
+      expect(pallet.heightCm).toBeLessThanOrEqual(44)
+      expect(pallet.totalWeightKg).toBeLessThanOrEqual(50)
+    }
+  })
   it('places boxes only when measured box data exists', () => {
     const result = optimizePallet(order([item(1, '1001'), item(2, '1002')]), [product('1001'), product('1002', { boxSpec: undefined })])
     expect(result.placements).toHaveLength(1)
@@ -53,7 +78,7 @@ describe('pallet packing recommendation', () => {
 
   it('limits a pallet to six dense layers and moves overflow to a second pallet', () => {
     const standard = product('1001', { boxSpec: { lengthCm: 40, widthCm: 26, heightCm: 22, weightKg: 5, maxTopLoadKg: 500 } })
-    const result = optimizePallet(order([item(1, '1001', '55')]), [standard])
+    const result = optimizePallet(order([item(1, '1001', '55')]), [standard], [], { inspectable: false })
     expect(result.requiredPallets).toBe(2)
     expect(result.pallets[0].layerCount).toBe(6)
     expect(result.pallets[0].placements).toHaveLength(54)

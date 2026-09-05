@@ -19,6 +19,11 @@ export type Product = {
   rigidity?: number
   fragility?: number
   imageDataUrl?: string
+  imageUrl?: string
+  version?: number
+  identificationNotes?: string
+  packagingColor?: string
+  variant?: string
   technicalDataSource?: 'manual' | 'simulated' | 'imported' | 'web'
   technicalVerificationStatus?: TechnicalVerificationStatus
   research?: ProductResearchRecord
@@ -38,6 +43,7 @@ export type PhysicalSpec = {
 
 export type ProductInput = Pick<Product, 'sku' | 'barcode' | 'name' | 'location'>
   & Partial<Pick<Product, 'description' | 'brand' | 'netContent' | 'unitsPerBox' | 'caseBarcode' | 'itemSpec' | 'boxSpec' | 'rigidity' | 'fragility' | 'imageDataUrl' | 'technicalDataSource' | 'technicalVerificationStatus' | 'research' | 'verificationStatus' | 'verificationSource' | 'verifiedAt'>>
+  & Partial<Pick<Product, 'identificationNotes' | 'packagingColor' | 'variant'>>
   & { id?: string }
 
 export async function listProducts() {

@@ -20,7 +20,6 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import { listFulfillmentSessions } from '../fulfillment/storage'
 import { listOrders } from '../orders/storage'
-import { listProducts } from '../products/storage'
 import { calculateOverviewAnalytics, calorieFormula, type AnalyticsPeriod } from './analytics'
 import { OverviewHeatmap } from './OverviewHeatmap'
 
@@ -181,6 +180,7 @@ export function OverviewDashboard() {
 }
 
 async function loadOverviewData() {
-  const [orders, sessions, products] = await Promise.all([listOrders(), listFulfillmentSessions(), listProducts()])
+  const [orders, sessions] = await Promise.all([listOrders(), listFulfillmentSessions()])
+  const products = orders.flatMap(order => order.productSnapshots || [])
   return { orders, sessions, products }
 }

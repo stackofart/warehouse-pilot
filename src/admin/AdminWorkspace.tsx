@@ -6,13 +6,11 @@ import {
   Boxes,
   CheckCircle2,
   ClipboardList,
-  Clock,
   Database,
   FileWarning,
   LayoutDashboard,
   Map as MapIcon,
   PackageCheck,
-  Plus,
   Search,
   Settings,
   ShieldCheck,
@@ -21,7 +19,7 @@ import {
   Warehouse,
   Wrench,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { AuthenticatedUser } from '../auth/session'
 import { UserProfile } from '../auth/UserProfile'
 import { listFulfillmentSessions } from '../fulfillment/storage'
@@ -31,11 +29,15 @@ import { getAdminProductPage, type SharedCatalogProduct } from '../products/shar
 import { AdminUsersPage } from './AdminUsersPage'
 import { SharedProductDatabase } from './SharedProductDatabase'
 import { adminSectionFromHash } from './routing'
+import { OrderQueue } from '../orders/OrderQueue'
+import { ReportsQueue } from '../reports/ReportsQueue'
+import { getReports, type Report } from '../reports/api'
 
-export type AdminSection = 'overview' | 'warehouse' | 'products' | 'workers' | 'orders' | 'reports' | 'settings'
+export type AdminSection = 'overview' | 'warehouse' | 'products' | 'workers' | 'orders' | 'reports' | 'settings' | 'new-order'
 
 type AdminWorkspaceProps = {
   user: AuthenticatedUser
+  intake?: ReactNode
 }
 
 type AdminData = {
@@ -44,9 +46,10 @@ type AdminData = {
   unverifiedProductTotal: number
   orders: SavedOrder[]
   sessions: FulfillmentSession[]
+  reports: Report[]
 }
 
-const emptyData: AdminData = { products: [], productTotal: 0, unverifiedProductTotal: 0, orders: [], sessions: [] }
+const emptyData: AdminData = { products: [], productTotal: 0, unverifiedProductTotal: 0, orders: [], sessions: [], reports: [] }
 
 const adminNavigation = [
   { section: 'overview' as const, label: 'Обзор', icon: LayoutDashboard },
@@ -59,10 +62,6 @@ const adminNavigation = [
 ]
 
 const adminHref = (section: AdminSection) => section === 'overview' ? '#admin' : `#admin/${section}`
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
-}
 
 function AdminPageHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
   return (
@@ -87,7 +86,7 @@ function AdminOverview({ data }: { data: AdminData }) {
         <article><span className="green"><Activity size={20} /></span><div><small>Активные сборки</small><strong>{activeSessions}</strong><em>{pausedSessions ? `${pausedSessions} на паузе` : 'Без задержек'}</em></div></article>
         <article><span className="blue"><ClipboardList size={20} /></span><div><small>Заказы в базе</small><strong>{data.orders.length}</strong><em>{completedSessions} завершено</em></div></article>
         <article><span className="violet"><Boxes size={20} /></span><div><small>Товаров</small><strong>{data.productTotal}</strong><em>{unverifiedProducts} требуют проверки</em></div></article>
-        <article><span className="amber"><FileWarning size={20} /></span><div><small>Открытые репорты</small><strong>0</strong><em>Модуль подготовлен</em></div></article>
+        <article><span className="amber"><FileWarning size={20} /></span><div><small>Открытые репорты</small><strong>{data.reports.length}</strong><em>{data.reports.filter(report => report.kind === 'missing').length} по отсутствию</em></div></article>
       </section>
 
       <div className="admin-dashboard-grid">
@@ -100,7 +99,7 @@ function AdminOverview({ data }: { data: AdminData }) {
                 const handled = Object.values(session.items).filter((item) => item.status === 'picked' || item.status === 'missing').length
                 const total = Object.keys(session.items).length
                 const percent = total ? Math.round(handled / total * 100) : 0
-                return <article key={session.orderId}><span className={`admin-status-dot ${session.status}`} /><div><b>{order?.orderNumber || 'Заказ без номера'}</b><small>Алексей Морозов · {session.currentAddress || 'Центральный вход'}</small><i><span style={{ width: `${percent}%` }} /></i></div><strong>{percent}%</strong></article>
+                return <article key={session.orderId}><span className={`admin-status-dot ${session.status}`} /><div><b>{order?.orderNumber || 'Заказ без номера'}</b><small>{order?.assigneeName || 'Комплектовщик'} · {session.mode === 'fast' ? 'Свободная сборка, без отслеживания позиции' : session.currentAddress || 'Центральный вход'}</small><i><span style={{ width: `${percent}%` }} /></i></div><strong>{percent}%</strong></article>
               })}
             </div>
           ) : <div className="admin-empty-compact"><PackageCheck size={28} /><b>Активных сборок пока нет</b><span>Они появятся после запуска заказа сборщиком.</span></div>}
@@ -109,7 +108,7 @@ function AdminOverview({ data }: { data: AdminData }) {
         <section className="admin-panel admin-attention-panel">
           <header><div><span>Требует внимания</span><h2>Контроль качества</h2></div></header>
           <a href="#admin/products"><span className="amber"><AlertTriangle size={18} /></span><div><b>Непроверенные товары</b><small>Проверьте данные, созданные после распознавания</small></div><strong>{unverifiedProducts}</strong></a>
-          <a href="#admin/reports"><span className="red"><FileWarning size={18} /></span><div><b>Репорты сборщиков</b><small>Не на месте, отсутствует, повреждено</small></div><strong>0</strong></a>
+          <a href="#admin/reports"><span className="red"><FileWarning size={18} /></span><div><b>Репорты сборщиков</b><small>Не на месте, отсутствует, повреждено</small></div><strong>{data.reports.length}</strong></a>
           <a href="#admin/warehouse"><span className="green"><MapIcon size={18} /></span><div><b>Геометрия склада</b><small>Источник: warehouse-layout.json</small></div><CheckCircle2 size={18} /></a>
         </section>
       </div>
@@ -152,49 +151,24 @@ function WarehouseConstructorTemplate() {
   )
 }
 
-function OrdersAdminPage({ data }: { data: AdminData }) {
-  const sessions = useMemo(() => new Map(data.sessions.map((session) => [session.orderId, session])), [data.sessions])
-  return (
-    <div className="admin-page">
-      <AdminPageHeading eyebrow="ОПЕРАЦИИ" title="Заказы" description="Контроль очереди, назначения и фактического прогресса сборки." actions={<button className="admin-primary-action" type="button" disabled><Plus size={17} />Создать задание</button>} />
-      <section className="admin-panel admin-table-panel">
-        <header><div><span>Все заказы</span><h2>{data.orders.length} записей</h2></div><label><Search size={16} /><input aria-label="Поиск заказа" placeholder="Номер заказа" disabled /></label></header>
-        {data.orders.length ? <div className="admin-data-table orders"><div className="admin-data-row admin-data-head"><span>Заказ</span><span>Состояние</span><span>Позиции</span><span>Исполнитель</span><span>Обновлён</span></div>{data.orders.map((order) => { const session = sessions.get(order.id); const status = session?.status ?? 'not-started'; return <div className="admin-data-row" key={order.id}><span><b>{order.orderNumber || 'Без номера'}</b><small>{order.notes || 'Без примечания'}</small></span><span><em className={`admin-state-pill ${status}`}>{status === 'completed' ? 'Завершён' : status === 'in-progress' ? 'В работе' : status === 'paused' ? 'Пауза' : 'Не начат'}</em></span><span>{order.items.length}</span><span>{session ? 'Алексей Морозов' : 'Не назначен'}</span><span>{formatDate(order.updatedAt)}</span></div> })}</div> : <div className="admin-empty-large"><ClipboardList size={34} /><h2>Заказов пока нет</h2><p>Сохранённые или импортированные заказы появятся в этой очереди.</p></div>}
-      </section>
-    </div>
-  )
-}
-
-function ReportsTemplate() {
-  return (
-    <div className="admin-page">
-      <AdminPageHeading eyebrow="КОНТРОЛЬ" title="Репорты и исключения" description="Единая очередь сообщений от сборщиков и задач для водителей погрузчиков." actions={<button className="admin-secondary-action" type="button" disabled>Настроить правила</button>} />
-      <section className="admin-report-kpis"><article><FileWarning size={19} /><div><strong>0</strong><span>Ожидают решения</span></div></article><article><Clock size={19} /><div><strong>0</strong><span>Передано погрузчику</span></div></article><article><CheckCircle2 size={19} /><div><strong>0</strong><span>Закрыто сегодня</span></div></article></section>
-      <div className="admin-report-grid">
-        <section className="admin-panel admin-report-queue"><header><div><span>Очередь</span><h2>Открытые репорты</h2></div><div className="admin-canvas-tabs"><button className="active" type="button">Все</button><button type="button" disabled>Не на месте</button><button type="button" disabled>Отсутствует</button></div></header><div className="admin-empty-large"><FileWarning size={36} /><h2>Репортов пока нет</h2><p>Сборщик сможет сообщить, что товар отсутствует, повреждён или находится по другому адресу.</p></div></section>
-        <aside className="admin-panel admin-report-flow"><header><div><span>Маршрут события</span><h2>Как будет работать</h2></div></header><ol><li><span>1</span><div><b>Сборщик создаёт репорт</b><small>Товар, адрес, тип проблемы и фото</small></div></li><li><span>2</span><div><b>Администратор проверяет</b><small>Подтверждает новый адрес или отклоняет</small></div></li><li><span>3</span><div><b>Команда получает обновление</b><small>Предупреждение видно всем сборщикам</small></div></li><li><span>4</span><div><b>Погрузчик получает задачу</b><small>При отсутствии товара в нижней ячейке</small></div></li></ol></aside>
-      </div>
-    </div>
-  )
-}
-
 function AdminSettingsTemplate() {
   return (
     <div className="admin-page">
       <AdminPageHeading eyebrow="СИСТЕМА" title="Настройки и доступ" description="Параметры ролей, локального хранения и будущей синхронизации." />
       <div className="admin-settings-grid">
         <section className="admin-panel admin-settings-card"><header><span><ShieldCheck size={20} /></span><div><h2>Роли и права</h2><p>Сборщик и администратор</p></div></header><div className="admin-setting-row"><div><b>Cloudflare Access</b><small>Подтверждает email пользователя до входа в приложение</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>Роли Worker</b><small>Права проверяются сервером для каждого API-запроса</small></div><em className="ready">Активно</em></div></section>
-        <section className="admin-panel admin-settings-card"><header><span><Database size={20} /></span><div><h2>Данные</h2><p>Общая и локальная части</p></div></header><div className="admin-setting-row"><div><b>Cloudflare D1</b><small>Единый каталог товаров и пользователи</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>IndexedDB</b><small>Заказы и прогресс пока остаются на устройстве</small></div><em>Переходный этап</em></div></section>
+        <section className="admin-panel admin-settings-card"><header><span><Database size={20} /></span><div><h2>Данные</h2><p>Общая и локальная части</p></div></header><div className="admin-setting-row"><div><b>Cloudflare D1</b><small>Товары, заказы, сотрудники, события и репорты</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>IndexedDB</b><small>Изолированный кэш пользователя и очередь синхронизации</small></div><em>Переходный этап</em></div></section>
         <section className="admin-panel admin-settings-card"><header><span><Bell size={20} /></span><div><h2>Уведомления</h2><p>Репорты и критические события</p></div></header><div className="admin-setting-row"><div><b>Репорты сборщиков</b><small>Центр уведомлений подготовлен</small></div><em>Шаблон</em></div><div className="admin-setting-row"><div><b>Push-уведомления</b><small>PWA на рабочих телефонах</small></div><em>Позже</em></div></section>
       </div>
     </div>
   )
 }
 
-export function AdminWorkspace({ user }: AdminWorkspaceProps) {
+export function AdminWorkspace({ user, intake }: AdminWorkspaceProps) {
   const [activeSection, setActiveSection] = useState<AdminSection>(() => adminSectionFromHash(window.location.hash))
   const [data, setData] = useState<AdminData>(emptyData)
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (!window.location.hash.startsWith('#admin')) window.location.hash = 'admin'
@@ -205,19 +179,23 @@ export function AdminWorkspace({ user }: AdminWorkspaceProps) {
 
   useEffect(() => {
     let cancelled = false
-    setIsLoading(true)
-    Promise.all([getAdminProductPage(), listOrders(), listFulfillmentSessions()])
-      .then(([productPage, orders, sessions]) => { if (!cancelled) setData({ products: productPage.items, productTotal: productPage.total, unverifiedProductTotal: productPage.unverified, orders, sessions }) })
-      .catch(console.error)
-      .finally(() => { if (!cancelled) setIsLoading(false) })
-    return () => { cancelled = true }
+    if (activeSection !== 'overview') { setIsLoading(false); return }
+    const refresh = () => {
+      setIsLoading(true)
+      Promise.all([getAdminProductPage(), listOrders(), listFulfillmentSessions(), getReports()])
+        .then(([productPage, orders, sessions, reports]) => { if (!cancelled) { setData({ products: productPage.items, productTotal: productPage.total, unverifiedProductTotal: productPage.unverified, orders, sessions, reports }); setError('') } })
+        .catch(reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'Не удалось обновить обзор.') })
+        .finally(() => { if (!cancelled) setIsLoading(false) })
+    }
+    refresh(); const timer = setInterval(refresh, 30000)
+    return () => { cancelled = true; clearInterval(timer) }
   }, [activeSection])
 
-  const content = activeSection === 'warehouse' ? <WarehouseConstructorTemplate />
+  const content = activeSection === 'new-order' ? intake : activeSection === 'warehouse' ? <WarehouseConstructorTemplate />
     : activeSection === 'products' ? <SharedProductDatabase />
       : activeSection === 'workers' ? <AdminUsersPage currentUser={user} />
-        : activeSection === 'orders' ? <OrdersAdminPage data={data} />
-          : activeSection === 'reports' ? <ReportsTemplate />
+        : activeSection === 'orders' ? <OrderQueue user={user} />
+          : activeSection === 'reports' ? <ReportsQueue role={user.role} />
             : activeSection === 'settings' ? <AdminSettingsTemplate />
               : <AdminOverview data={data} />
 
@@ -230,8 +208,9 @@ export function AdminWorkspace({ user }: AdminWorkspaceProps) {
         <div className="sidebar-bottom"><div className="local-card"><span className="local-icon"><Database size={18} /></span><div><strong>Общая база D1</strong><span>Доступ проверяется на Worker</span></div></div><UserProfile user={user} /></div>
       </aside>
       <main className="main-content admin-main-content">
-        <header className="topbar admin-topbar"><div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div><div className="admin-topbar-actions"><span className="admin-sync-state"><i />D1 подключена</span><button type="button" aria-label="Уведомления администратора"><Bell size={18} /><i /></button><UserProfile compact user={user} /></div></header>
+        <header className="topbar admin-topbar"><div className="mobile-brand"><div className="brand-mark"><Warehouse size={20} /></div><strong>Warehouse Pilot</strong></div><div className="admin-topbar-actions"><span className="admin-sync-state"><i />Общий контур D1</span><button type="button" aria-label="Уведомления администратора"><Bell size={18} /><i /></button><UserProfile compact user={user} /></div></header>
         {isLoading && <div className="admin-loading-line" />}
+        {error && activeSection === 'overview' && <p role="alert" className="operations-message">{error} Показатели могут быть неактуальны.</p>}
         {content}
       </main>
       <nav className="mobile-bottom-nav admin-mobile-nav" aria-label="Мобильная навигация администратора">{adminNavigation.map(({ section, label, icon: Icon }) => <a className={activeSection === section ? 'active' : ''} href={adminHref(section)} key={section}><Icon size={20} /><span>{label === 'Конструктор склада' ? 'Склад' : label === 'Контроль и репорты' ? 'Репорты' : label === 'База товаров' ? 'Товары' : label}</span></a>)}</nav>

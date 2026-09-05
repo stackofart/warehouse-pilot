@@ -9,7 +9,7 @@ export function AdminUsersPage({ currentUser }: { currentUser: AuthenticatedUser
   const [message, setMessage] = useState('')
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
-  const [role, setRole] = useState<'picker' | 'admin'>('picker')
+  const [role, setRole] = useState<'picker' | 'admin' | 'replenisher'>('picker')
 
   const reload = useCallback(async () => {
     setState('loading')
@@ -55,7 +55,7 @@ export function AdminUsersPage({ currentUser }: { currentUser: AuthenticatedUser
         <span><Plus size={19} /></span>
         <label>Имя<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Иван Петров" /></label>
         <label>Email<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="picker@example.com" /></label>
-        <label>Роль<select value={role} onChange={(event) => setRole(event.target.value as 'picker' | 'admin')}><option value="picker">Сборщик</option><option value="admin">Администратор</option></select></label>
+        <label>Роль<select value={role} onChange={(event) => setRole(event.target.value as 'picker' | 'admin' | 'replenisher')}><option value="picker">Сборщик</option><option value="admin">Администратор</option><option value="replenisher">Водитель погрузчика</option></select></label>
         <button className="admin-primary-action" type="submit">Добавить</button>
       </form>
       {message && <div className="admin-inline-message"><ShieldCheck size={17} />{message}</div>}
@@ -65,7 +65,7 @@ export function AdminUsersPage({ currentUser }: { currentUser: AuthenticatedUser
           : state === 'error' ? <div className="admin-empty-compact"><UserCog size={27} /><b>{message}</b></div>
             : users.length ? <div className="admin-user-list">{users.map((user) => {
               const self = user.id === currentUser.id
-              return <article key={user.id}><span className="admin-user-avatar">{user.role === 'admin' ? <ShieldCheck size={18} /> : <Users size={18} />}</span><div><b>{user.name}</b><small>{user.email}{self ? ' · это вы' : ''}</small></div><select aria-label={`Роль ${user.name}`} value={user.role} disabled={self} onChange={(event) => void update(user, { role: event.target.value as ManagedUser['role'] })}><option value="picker">Сборщик</option><option value="admin">Администратор</option></select><button className={user.status === 'active' ? 'active' : 'suspended'} type="button" disabled={self} onClick={() => void update(user, { status: user.status === 'active' ? 'suspended' : 'active' })}>{user.status === 'active' ? 'Активен' : 'Доступ приостановлен'}</button></article>
+              return <article key={user.id}><span className="admin-user-avatar">{user.role === 'admin' ? <ShieldCheck size={18} /> : <Users size={18} />}</span><div><b>{user.name}</b><small>{user.email}{self ? ' · это вы' : ''}</small></div><select aria-label={`Роль ${user.name}`} value={user.role} disabled={self} onChange={(event) => void update(user, { role: event.target.value as ManagedUser['role'] })}><option value="picker">Сборщик</option><option value="admin">Администратор</option><option value="replenisher">Водитель погрузчика</option></select><button className={user.status === 'active' ? 'active' : 'suspended'} type="button" disabled={self} onClick={() => void update(user, { status: user.status === 'active' ? 'suspended' : 'active' })}>{user.status === 'active' ? 'Активен' : 'Доступ приостановлен'}</button></article>
             })}</div> : <div className="admin-empty-compact"><Users size={27} /><b>Пользователей пока нет</b></div>}
       </section>
     </div>

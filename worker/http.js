@@ -11,7 +11,19 @@ export function jsonResponse(body, status = 200, headers = {}) {
 
 export async function readJson(request) {
   try {
-    return { body: await request.json() }
+    const reader = request.body?.getReader()
+    if (!reader) throw new Error('Missing body')
+    const chunks = []; let size = 0
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > 2 * 1024 * 1024) { await reader.cancel(); return { response: jsonResponse({ error: 'JSON превышает 2 МБ.' }, 413) } }
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size); let offset = 0
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+    return { body: JSON.parse(new TextDecoder().decode(bytes)) }
   } catch {
     return { response: jsonResponse({ error: 'Не удалось прочитать JSON запроса.', code: 'invalid_json' }, 400) }
   }

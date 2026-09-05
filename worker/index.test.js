@@ -56,7 +56,7 @@ function authenticatedEnv(bindings = {}, role = 'admin', catalogRows = []) {
     DB: {
       prepare: vi.fn((sql) => ({
         bind: vi.fn(() => ({
-          first: vi.fn(async () => sql.includes('FROM users') ? user : null),
+          first: vi.fn(async () => sql.includes('FROM users') ? user : sql.includes('ai_usage') ? { count: 1 } : null),
           all: vi.fn(async () => ({ results: catalogRows })),
           run: vi.fn(async () => ({ success: true })),
         })),

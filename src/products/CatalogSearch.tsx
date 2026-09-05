@@ -62,6 +62,7 @@ export function CatalogSearch() {
           <span className="shared-product-icon"><Boxes size={21} /></span>
           <div className="shared-product-main"><h2>{product.name}</h2><p><b>{product.location}</b><span>Штрихкод {product.barcode}</span><span>מק״ט {product.sku}</span></p></div>
           <div className="shared-product-meta"><span className={product.verificationStatus === 'verified' ? 'verified' : 'unverified'}>{product.verificationStatus === 'verified' ? 'Проверен' : 'Не проверен'}</span><small>{product.unitsPerBox ? `${product.unitsPerBox} шт. в коробке` : 'Фасовка не указана'}</small></div>
+          <details><summary>Как отличить / подробности</summary><div className="operations-identification">{product.imageUrl && <img src={product.imageUrl} alt={product.name} />}<div><b>{product.variant} {product.packagingColor}</b><p>{product.identificationNotes}</p><p dir="auto">{product.description}</p><p>{product.brand}</p></div></div></details>
         </article>
       ))}</div> : state === 'ready' && <div className="shared-search-empty"><Search size={34} /><h2>Ничего не найдено</h2><p>Проверьте штрихкод, מק״ט, название или адрес.</p></div>}
     </div>

@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { jsonResponse } from './http.js'
 
-const roles = new Set(['admin', 'picker'])
+const roles = new Set(['admin', 'picker', 'replenisher'])
 const jwksByTeamDomain = new Map()
 
 function normalizeEmail(value) {
@@ -63,7 +63,7 @@ function userFromRow(row) {
     id: row.id,
     email: row.email,
     name: row.display_name,
-    role: roles.has(row.role) ? row.role : 'picker',
+    role: row.operational_role === 'replenisher' ? 'replenisher' : roles.has(row.role) ? row.role : 'picker',
     status: row.status,
   }
 }
@@ -87,7 +87,7 @@ export async function authenticateRequest(request, env, ctx) {
 
   let row
   try {
-    row = await env.DB.prepare('SELECT id, email, display_name, role, status FROM users WHERE email = ? COLLATE NOCASE LIMIT 1').bind(email).first()
+    row = await env.DB.prepare('SELECT id, email, display_name, role, operational_role, status FROM users WHERE email = ? COLLATE NOCASE LIMIT 1').bind(email).first()
   } catch (reason) {
     console.error('User lookup failed', reason)
     return { response: jsonResponse({ error: 'Схема общей базы не подготовлена. Примените D1-миграции.', code: 'database_migration_required' }, 503) }

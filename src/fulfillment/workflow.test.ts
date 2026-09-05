@@ -45,10 +45,10 @@ describe('order fulfillment workflow', () => {
     expect(() => completeFulfillmentSession(session)).toThrow('Сначала обработайте все позиции заказа')
   })
 
-  it('stores a picker comment and marks the position for review', () => {
+  it('stores a picker comment without changing the collection status', () => {
     const session = createFulfillmentSession('order-1', [1])
     const updated = updateFulfillmentItemNote(session, 1, 'Упаковка повреждена', '2026-08-19T08:01:00.000Z')
-    expect(updated.items['1']).toMatchObject({ status: 'checking', note: 'Упаковка повреждена' })
+    expect(updated.items['1']).toMatchObject({ status: 'pending', note: 'Упаковка повреждена' })
     expect(updated.events.at(-1)).toMatchObject({ type: 'item_note_changed', row: 1, note: 'Упаковка повреждена' })
   })
 

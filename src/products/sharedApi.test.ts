@@ -65,8 +65,8 @@ describe('shared catalog api', () => {
       errors: [{ index: 9, error: 'invalid' }, { index: 10, error: 'invalid' }],
     })
     expect(fetcher).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).products).toHaveLength(10)
-    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).products).toHaveLength(1)
+    expect(JSON.parse(String(vi.mocked(fetcher).mock.calls[0][1]?.body)).products).toHaveLength(10)
+    expect(JSON.parse(String(vi.mocked(fetcher).mock.calls[1][1]?.body)).products).toHaveLength(1)
     expect(progress.mock.calls).toEqual([[10, 11], [11, 11]])
   })
 })

@@ -126,8 +126,9 @@ function nearestNeighbor2Opt(distances: number[][], stopCount: number, finishMat
   return order
 }
 
+let defaultGraph: ReturnType<typeof buildWarehouseGraph> | undefined
 export function optimizeOrderRoute(items: RecognizedOrderItem[], options: RouteOptimizationOptions = {}): RouteOptimizationResult {
-  const graphResult = buildWarehouseGraph()
+  const graphResult = defaultGraph ??= buildWarehouseGraph()
   if (graphResult.status !== 'ok') return { status: 'invalid', reason: 'WAREHOUSE_LAYOUT_INVALID' }
 
   const itemsByAddress = new Map<string, RecognizedOrderItem[]>()

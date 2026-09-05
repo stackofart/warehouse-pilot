@@ -2,13 +2,13 @@ import { jsonResponse, methodNotAllowed, readJson } from './http.js'
 
 const MAX_PICKER_RESULTS = 20
 const MAX_ADMIN_RESULTS = 100
-const MAX_IMPORT_ROWS = 500
+const MAX_IMPORT_ROWS = 10
 
 const text = (value, length = 500) => typeof value === 'string' ? value.trim().slice(0, length) : ''
 const digits = (value, length = 32) => text(value, length).replace(/\D/g, '')
 const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null
 
-function productFromRow(row, full = false) {
+export function productFromRow(row, full = true) {
   const product = {
     id: row.id,
     sku: row.sku,
@@ -23,6 +23,8 @@ function productFromRow(row, full = false) {
   if (!full) return product
   return {
     ...product,
+    ...JSON.parse(row.metadata_json || '{}'),
+    imageUrl: row.image_key ? `/api/catalog/products/${row.id}/image?v=${row.version}` : undefined,
     description: row.description || '',
     brand: row.brand || '',
     netContent: row.net_content || '',
@@ -68,6 +70,7 @@ function normalizedProduct(input, existingId = '') {
     verificationStatus: input?.verificationStatus === 'unverified' ? 'unverified' : 'verified',
     verificationSource: ['manual', 'imported', 'recognition', 'legacy'].includes(input?.verificationSource) ? input.verificationSource : 'imported',
     verifiedAt: input?.verificationStatus === 'unverified' ? null : text(input?.verifiedAt, 50) || now,
+    metadata: Object.fromEntries(['technicalDataSource', 'technicalVerificationStatus', 'identificationNotes', 'packagingColor', 'variant', 'research'].filter(key => input?.[key] !== undefined).map(key => [key, input[key]])),
     now,
   }
 }
@@ -85,7 +88,7 @@ function productBindings(product, actorId) {
     positive(product.itemSpec.lengthCm), positive(product.itemSpec.widthCm), positive(product.itemSpec.heightCm), positive(product.itemSpec.weightKg),
     positive(product.boxSpec.lengthCm), positive(product.boxSpec.widthCm), positive(product.boxSpec.heightCm), positive(product.boxSpec.weightKg), positive(product.boxSpec.maxTopLoadKg),
     product.rigidity, product.fragility, product.verificationStatus, product.verificationSource, product.verifiedAt,
-    product.now, product.now, actorId,
+    product.now, product.now, actorId, JSON.stringify(product.metadata),
   ]
 }
 
@@ -94,18 +97,18 @@ const productInsertSql = `INSERT INTO products (
   item_length_cm, item_width_cm, item_height_cm, item_weight_kg,
   box_length_cm, box_width_cm, box_height_cm, box_weight_kg, box_max_top_load_kg,
   rigidity, fragility, verification_status, verification_source, verified_at,
-  created_at, updated_at, updated_by
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  created_at, updated_at, updated_by, metadata_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 async function pickerSearch(request, env) {
   const url = new URL(request.url)
-  const query = text(url.searchParams.get('q'), 120)
+  const query = text(url.searchParams.get('q'), 120).replace(/[%_]/g, '').trim()
   if (query.length < 2) return jsonResponse({ error: 'Введите минимум два символа для поиска.', code: 'query_too_short' }, 400)
   const numeric = digits(query)
-  const like = `%${query.replace(/[%_]/g, '')}%`
-  const result = await env.DB.prepare(`SELECT id, sku, barcode, name, location, units_per_box, verification_status, version, updated_at
+  const like = query
+  const result = await env.DB.prepare(`SELECT *
     FROM products
-    WHERE deleted_at IS NULL AND (barcode = ? OR sku = ? OR name LIKE ? COLLATE NOCASE OR location LIKE ? COLLATE NOCASE)
+    WHERE deleted_at IS NULL AND (barcode = ? OR sku = ? OR instr(lower(name), lower(?)) > 0 OR instr(lower(location), lower(?)) > 0)
     ORDER BY CASE WHEN barcode = ? THEN 0 WHEN sku = ? THEN 1 WHEN location = ? COLLATE NOCASE THEN 2 ELSE 3 END, name
     LIMIT ?`)
     .bind(numeric, numeric, like, like, numeric, numeric, query.toUpperCase(), MAX_PICKER_RESULTS)
@@ -116,30 +119,35 @@ async function pickerSearch(request, env) {
 async function matchProducts(request, env) {
   const parsed = await readJson(request)
   if (parsed.response) return parsed.response
-  const items = Array.isArray(parsed.body?.items) ? parsed.body.items.slice(0, 100) : []
-  const keys = [...new Set(items.flatMap((item) => [digits(item?.barcode), digits(item?.sku)].filter(Boolean)))].slice(0, 200)
-  if (!keys.length) return jsonResponse({ items: [] })
-  const placeholders = keys.map(() => '?').join(',')
-  const result = await env.DB.prepare(`SELECT id, sku, barcode, name, location, units_per_box, verification_status, version, updated_at
-    FROM products WHERE deleted_at IS NULL AND (barcode IN (${placeholders}) OR sku IN (${placeholders})) LIMIT 100`)
-    .bind(...keys, ...keys)
-    .all()
-  return jsonResponse({ items: result.results.map((row) => productFromRow(row)) })
+  if (!Array.isArray(parsed.body?.items) || parsed.body.items.length > 100) return jsonResponse({ error: 'Передайте от 0 до 100 позиций в пакете.' }, 400)
+  return jsonResponse({ items: await findProducts(env, parsed.body.items) })
+}
+
+export async function findProducts(env, items) {
+  const keys = [...new Set(items.flatMap(item => [digits(item?.barcode), digits(item?.sku)].filter(Boolean)))]
+  const found = new Map()
+  for (let offset = 0; offset < keys.length; offset += 40) {
+    const chunk = keys.slice(offset, offset + 40)
+    const placeholders = chunk.map(() => '?').join(',')
+    const result = await env.DB.prepare(`SELECT * FROM products WHERE deleted_at IS NULL AND (barcode IN (${placeholders}) OR sku IN (${placeholders}))`).bind(...chunk, ...chunk).all()
+    result.results.forEach(row => found.set(row.id, productFromRow(row)))
+  }
+  return [...found.values()]
 }
 
 async function adminList(request, env) {
   const url = new URL(request.url)
   const query = text(url.searchParams.get('q'), 120)
   const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0))
-  const like = `%${query.replace(/[%_]/g, '')}%`
-  const where = query ? 'deleted_at IS NULL AND (barcode = ? OR sku = ? OR name LIKE ? COLLATE NOCASE OR location LIKE ? COLLATE NOCASE)' : 'deleted_at IS NULL'
+  const like = query
+  const where = query ? 'deleted_at IS NULL AND (barcode = ? OR sku = ? OR instr(lower(name), lower(?)) > 0 OR instr(lower(location), lower(?)) > 0)' : 'deleted_at IS NULL'
   const numeric = digits(query)
   const statement = env.DB.prepare(`SELECT * FROM products WHERE ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
   const result = query
     ? await statement.bind(numeric, numeric, like, like, MAX_ADMIN_RESULTS, offset).all()
     : await statement.bind(MAX_ADMIN_RESULTS, offset).all()
-  const countStatement = env.DB.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN verification_status = 'unverified' THEN 1 ELSE 0 END) AS unverified FROM products WHERE deleted_at IS NULL`)
-  const counts = await countStatement.first()
+  const countStatement = env.DB.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN verification_status = 'unverified' THEN 1 ELSE 0 END) AS unverified FROM products WHERE ${where}`)
+  const counts = await (query ? countStatement.bind(numeric, numeric, like, like) : countStatement).first()
   return jsonResponse({ items: result.results.map((row) => productFromRow(row, true)), total: counts?.total ?? 0, unverified: counts?.unverified ?? 0, offset, limit: MAX_ADMIN_RESULTS })
 }
 
@@ -155,7 +163,7 @@ async function adminCreate(request, env, user) {
     console.error('Product insert failed', reason)
     return jsonResponse({ error: 'Товар с таким מק״ט или штрихкодом уже существует.', code: 'product_conflict' }, 409)
   }
-  return jsonResponse({ product }, 201)
+  return jsonResponse({ product: productFromRow(await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(product.id).first()) }, 201)
 }
 
 async function adminImport(request, env, user) {
@@ -170,7 +178,7 @@ async function adminImport(request, env, user) {
   let skipped = 0
   const errors = []
   for (let index = 0; index < source.length; index += 1) {
-    const candidate = normalizedProduct(source[index])
+    let candidate = normalizedProduct({ verificationStatus: 'unverified', ...source[index] })
     const validation = validateProduct(candidate)
     if (validation) {
       skipped += 1
@@ -184,7 +192,7 @@ async function adminImport(request, env, user) {
       errors.push({ index, error: 'מק״ט и штрихкод принадлежат разным товарам.' })
       continue
     }
-    const existing = matchedIds.length ? { id: matchedIds[0] } : null
+    const existing = matchedIds.length ? await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(matchedIds[0]).first() : null
     if (!existing) {
       try {
         await env.DB.prepare(productInsertSql).bind(...productBindings(candidate, user.id)).run()
@@ -197,19 +205,26 @@ async function adminImport(request, env, user) {
       continue
     }
     try {
-      await env.DB.prepare(`UPDATE products SET sku = ?, barcode = ?, name = ?, location = ?, description = ?, brand = ?, net_content = ?, units_per_box = ?, case_barcode = ?,
+      const current = productFromRow(existing)
+      const conflicts = ['name', 'location', 'sku', 'barcode', 'description', 'brand', 'unitsPerBox', 'rigidity', 'fragility'].filter(key => source[index][key] != null && source[index][key] !== '' && current[key] != null && current[key] !== '' && String(source[index][key]) !== String(current[key]))
+      for (const key of ['itemSpec', 'boxSpec']) for (const [field, value] of Object.entries(source[index][key] || {})) if (value != null && current[key]?.[field] != null && value !== current[key][field]) conflicts.push(`${key}.${field}`)
+      if (conflicts.length) throw new Error(`Конфликт: ${conflicts.join(', ')}. Существующая карточка сохранена; внесите изменения через редактор.`)
+      const nonEmpty = object => Object.fromEntries(Object.entries(object || {}).filter(([, value]) => value !== null && value !== undefined && value !== ''))
+      candidate = normalizedProduct({ ...current, ...nonEmpty(source[index]), itemSpec: { ...current.itemSpec, ...nonEmpty(source[index].itemSpec) }, boxSpec: { ...current.boxSpec, ...nonEmpty(source[index].boxSpec) }, verificationStatus: current.verificationStatus, verificationSource: current.verificationSource, verifiedAt: current.verifiedAt })
+      const result = await env.DB.prepare(`UPDATE products SET sku = ?, barcode = ?, name = ?, location = ?, description = ?, brand = ?, net_content = ?, units_per_box = ?, case_barcode = ?,
         item_length_cm = ?, item_width_cm = ?, item_height_cm = ?, item_weight_kg = ?, box_length_cm = ?, box_width_cm = ?, box_height_cm = ?, box_weight_kg = ?, box_max_top_load_kg = ?,
-        rigidity = ?, fragility = ?, verification_status = ?, verification_source = ?, verified_at = ?, version = version + 1, updated_at = ?, updated_by = ? WHERE id = ?`)
+        rigidity = ?, fragility = ?, verification_status = ?, verification_source = ?, verified_at = ?, version = version + 1, updated_at = ?, updated_by = ?, metadata_json = ? WHERE id = ? AND version = ?`)
         .bind(candidate.sku, candidate.barcode, candidate.name, candidate.location, candidate.description, candidate.brand, candidate.netContent, candidate.unitsPerBox, candidate.caseBarcode,
           positive(candidate.itemSpec.lengthCm), positive(candidate.itemSpec.widthCm), positive(candidate.itemSpec.heightCm), positive(candidate.itemSpec.weightKg),
           positive(candidate.boxSpec.lengthCm), positive(candidate.boxSpec.widthCm), positive(candidate.boxSpec.heightCm), positive(candidate.boxSpec.weightKg), positive(candidate.boxSpec.maxTopLoadKg),
-          candidate.rigidity, candidate.fragility, candidate.verificationStatus, candidate.verificationSource, candidate.verifiedAt, candidate.now, user.id, existing.id)
+          candidate.rigidity, candidate.fragility, candidate.verificationStatus, candidate.verificationSource, candidate.verifiedAt, candidate.now, user.id, JSON.stringify(candidate.metadata), existing.id, existing.version)
         .run()
+      if (!result.meta?.changes) throw new Error('Карточка изменена другим пользователем. Повторите импорт.')
       updated += 1
     } catch (reason) {
       console.warn('Imported product update failed', reason)
       skipped += 1
-      errors.push({ index, error: 'Не удалось обновить товар из-за конфликта.' })
+      errors.push({ index, error: reason.message || 'Не удалось обновить товар из-за конфликта.' })
     }
   }
   await env.DB.prepare('INSERT INTO audit_log (id, actor_id, action, entity_type, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
