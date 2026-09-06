@@ -34,6 +34,7 @@ import { adminHash, adminSectionFromHash } from './routing'
 import { AdminOrderDetail } from './AdminOrderDetail'
 import { OrderQueue } from '../orders/OrderQueue'
 import { ReportsQueue } from '../reports/ReportsQueue'
+import { AdminReportNotifications } from '../reports/AdminReportNotifications'
 import { getReports, type Report } from '../reports/api'
 
 export type AdminSection = 'overview' | 'warehouse' | 'products' | 'workers' | 'orders' | 'reports' | 'settings' | 'new-order' | 'pallet'
@@ -162,7 +163,7 @@ function AdminSettingsTemplate() {
       <div className="admin-settings-grid">
         <section className="admin-panel admin-settings-card"><header><span><ShieldCheck size={20} /></span><div><h2>Роли и права</h2><p>Сборщик и администратор</p></div></header><div className="admin-setting-row"><div><b>Cloudflare Access</b><small>Подтверждает email пользователя до входа в приложение</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>Роли Worker</b><small>Права проверяются сервером для каждого API-запроса</small></div><em className="ready">Активно</em></div></section>
         <section className="admin-panel admin-settings-card"><header><span><Database size={20} /></span><div><h2>Данные</h2><p>Общая и локальная части</p></div></header><div className="admin-setting-row"><div><b>Cloudflare D1</b><small>Товары, заказы, сотрудники, события и репорты</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>IndexedDB</b><small>Изолированный кэш пользователя и очередь синхронизации</small></div><em>Переходный этап</em></div></section>
-        <section className="admin-panel admin-settings-card"><header><span><Bell size={20} /></span><div><h2>Уведомления</h2><p>Репорты и критические события</p></div></header><div className="admin-setting-row"><div><b>Репорты сборщиков</b><small>Центр уведомлений подготовлен</small></div><em>Шаблон</em></div><div className="admin-setting-row"><div><b>Push-уведомления</b><small>PWA на рабочих телефонах</small></div><em>Позже</em></div></section>
+        <section className="admin-panel admin-settings-card"><header><span><Bell size={20} /></span><div><h2>Уведомления</h2><p>Репорты и критические события</p></div></header><div className="admin-setting-row"><div><b>Репорты сборщиков</b><small>Счётчик и уведомления внутри приложения</small></div><em className="ready">Активно</em></div><div className="admin-setting-row"><div><b>Push-уведомления</b><small>PWA на рабочих телефонах</small></div><em>Позже</em></div></section>
       </div>
     </div>
   )
@@ -221,7 +222,7 @@ export function AdminWorkspace({ user, intake }: AdminWorkspaceProps) {
         <div className="sidebar-bottom"><div className="local-card"><span className="local-icon"><Database size={18} /></span><div><strong>Общая база D1</strong><span>Доступ проверяется на Worker</span></div></div><UserProfile user={user} /></div>
       </aside>
       <main className="main-content admin-main-content">
-        <header className="topbar admin-topbar"><button className="mobile-menu-trigger" aria-label="Открыть меню администратора" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu size={20} /></button><div className="mobile-brand"><strong>Управление складом</strong></div><div className="admin-topbar-actions"><a className="admin-sync-state" href="#admin/reports"><Bell size={16} />Сообщения</a><UserProfile compact user={user} /></div></header>
+        <header className="topbar admin-topbar"><button className="mobile-menu-trigger" aria-label="Открыть меню администратора" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu size={20} /></button><div className="mobile-brand"><strong>Управление складом</strong></div><div className="admin-topbar-actions"><AdminReportNotifications inReports={activeSection === 'reports'} /><UserProfile compact user={user} /></div></header>
         {isLoading && <div className="admin-loading-line" />}
         {error && activeSection === 'overview' && <p role="alert" className="operations-message">{error} Показатели могут быть неактуальны.</p>}
         {content}

@@ -1,7 +1,7 @@
 import { apiRequest, mayUseOfflineCache } from '../storage/apiClient'
 import { openDatabase, OUTBOX_STORE, requestToPromise } from '../storage/database'
-export type Report = { id: string; orderId: string; productId: string | null; sku: string; barcode: string; name: string; address: string; suggestedAddress: string | null; kind: 'missing' | 'moved' | 'damaged' | 'comment'; note: string; status: 'open' | 'checking-reserve' | 'replenishing' | 'ready' | 'resolved' | 'rejected'; author: string; updatedBy: string; version: number; createdAt: string; updatedAt: string }
-export type ReportInput = { id: string; orderId: string; row: number; kind: Report['kind']; note: string; suggestedAddress?: string }
+export type Report = { id: string; orderId: string; productId: string | null; sku: string; barcode: string; name: string; address: string; suggestedAddress: string | null; kind: 'missing' | 'moved' | 'damaged' | 'comment'; note: string; photoUrl?: string; status: 'open' | 'checking-reserve' | 'replenishing' | 'ready' | 'resolved' | 'rejected'; author: string; updatedBy: string; version: number; createdAt: string; updatedAt: string }
+export type ReportInput = { id: string; orderId: string; row: number; kind: Report['kind']; note: string; suggestedAddress?: string; photoDataUrl?: string }
 export const reportStatus: Record<Report['status'], string> = { open: 'Сообщено', 'checking-reserve': 'Проверяют резерв', replenishing: 'Погрузчик пополняет', ready: 'Товар пополнен', resolved: 'Подтверждено / закрыто', rejected: 'Отклонено' }
 export async function getReports(orderId?: string) {
   const all: Report[] = []

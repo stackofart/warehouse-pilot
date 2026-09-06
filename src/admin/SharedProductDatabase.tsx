@@ -1,9 +1,10 @@
-import { AlertTriangle, Barcode, Boxes, ChevronDown, ChevronUp, Database, FileJson, ImageOff, MapPin, RefreshCw, Search, ShieldCheck, Upload } from 'lucide-react'
+import { AlertTriangle, Barcode, Boxes, ChevronDown, ChevronUp, Database, Download, FileJson, ImageOff, MapPin, RefreshCw, Search, ShieldCheck, Upload } from 'lucide-react'
 import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { type Product } from '../products/storage'
 import { openDatabase, PRODUCTS_STORE, requestToPromise } from '../storage/database'
 import { ProductEditor } from '../products/ProductEditor'
 import { parseProductDocument } from '../products/transfer'
+import { exportSharedCatalog } from '../products/export'
 import { createSharedProduct, getAdminProductPage, importSharedProducts, type SharedProductImportResult, type SharedProductPage } from '../products/sharedApi'
 
 const emptyPage: SharedProductPage = { items: [], total: 0, unverified: 0, offset: 0, limit: 100 }
@@ -28,6 +29,8 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
   const [message, setMessage] = useState('')
   const [importErrors, setImportErrors] = useState<SharedProductImportResult['errors']>([])
   const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportCount, setExportCount] = useState(0)
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null)
   const [expandedProductId, setExpandedProductId] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -47,6 +50,19 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
   useEffect(() => { void load() }, [load])
 
   const search = (event: FormEvent) => { event.preventDefault(); void load(query) }
+  const exportCatalog = async () => {
+    setExporting(true); setExportCount(0); setMessage('')
+    try {
+      const document = await exportSharedCatalog(setExportCount)
+      const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2)], { type: 'application/json' }))
+      const link = window.document.createElement('a')
+      link.href = url; link.download = `warehouse-products-${new Date().toISOString().slice(0, 10)}.json`
+      window.document.body.append(link); link.click(); link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+      setMessage(`Экспорт готов: ${document.products.length} товаров, включая фотографии. Файл можно импортировать обратно.`)
+    } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Не удалось скачать каталог. Файл не создан.') }
+    finally { setExporting(false) }
+  }
   const importSummary = (result: SharedProductImportResult) => {
     setImportErrors(result.errors)
     const errorDetails = result.errors.length
@@ -125,7 +141,7 @@ export function SharedProductDatabase({ onChange }: { onChange?: () => void }) {
 
   return (
     <div className="admin-page">
-      <div className="admin-page-heading"><div><p className="eyebrow">ОБЩИЙ СПРАВОЧНИК</p><h1>База товаров</h1><p>Карточки, адреса и характеристики для всей команды.</p></div><div className="admin-heading-actions"><input ref={fileInputRef} type="file" accept="application/json,.json" hidden onChange={(event) => void importJson(event)} /><button className="admin-secondary-action" type="button" disabled={importing} onClick={() => fileInputRef.current?.click()}><FileJson size={17} />Импорт JSON</button><button className="admin-primary-action" type="button" disabled={importing} onClick={() => void migrate()}><Upload size={17} />{importing ? importProgress ? `Перенос ${importProgress.processed}/${importProgress.total}` : 'Подготовка…' : 'Перенести с устройства'}</button></div></div>
+      <div className="admin-page-heading"><div><p className="eyebrow">ОБЩИЙ СПРАВОЧНИК</p><h1>База товаров</h1><p>Карточки, адреса и характеристики для всей команды.</p></div><div className="admin-heading-actions"><button className="admin-secondary-action" type="button" disabled={exporting || importing} onClick={() => void exportCatalog()}><Download size={17} />{exporting ? `Скачиваем: ${exportCount}` : 'Скачать БД товаров'}</button><input ref={fileInputRef} type="file" accept="application/json,.json" hidden onChange={(event) => void importJson(event)} /><button className="admin-secondary-action" type="button" disabled={importing} onClick={() => fileInputRef.current?.click()}><FileJson size={17} />Импорт JSON</button><button className="admin-primary-action" type="button" disabled={importing} onClick={() => void migrate()}><Upload size={17} />{importing ? importProgress ? `Перенос ${importProgress.processed}/${importProgress.total}` : 'Подготовка…' : 'Перенести с устройства'}</button></div></div>
       <details className="admin-product-create">
         <summary>Добавить один товар вручную</summary>
         <form onSubmit={(event) => void create(event)}>

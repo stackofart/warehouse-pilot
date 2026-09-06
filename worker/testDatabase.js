@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { readFileSync } from 'node:fs'
 export function testDatabase() {
   const sqlite = new DatabaseSync(':memory:')
-  for (const file of ['0001_identity_and_catalog.sql', '0002_operations.sql', '0003_pallet_states.sql']) sqlite.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8'))
+  for (const file of ['0001_identity_and_catalog.sql', '0002_operations.sql', '0003_pallet_states.sql', '0004_report_photos.sql']) sqlite.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8'))
   const binding = {
     prepare(sql) {
       const stmt = sqlite.prepare(sql)

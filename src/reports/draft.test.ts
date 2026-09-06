@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { prepareReportDraft } from './draft'
 
 describe('report inputs', () => {
+  it('allows a photo-only comment', () => {
+    expect(prepareReportDraft('comment', '', '', true).error).toBe('')
+  })
   it('accepts a new address without a comment and normalizes it', () => {
     expect(prepareReportDraft('moved', '', ' 24f ')).toEqual({ error: '', kind: 'moved', note: '', suggestedAddress: '24.F' })
   })

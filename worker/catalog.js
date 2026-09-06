@@ -235,6 +235,14 @@ async function adminImport(request, env, user) {
 
 export async function handleCatalogRequest(request, env, user, isAdmin) {
   const url = new URL(request.url)
+  if (url.pathname === '/api/admin/products/export') {
+    if (!isAdmin) return jsonResponse({ error: 'Экспорт доступен только администратору.' }, 403)
+    if (request.method !== 'GET') return methodNotAllowed(['GET'])
+    const cursor = url.searchParams.get('cursor') || ''
+    const rows = await env.DB.prepare('SELECT * FROM products WHERE deleted_at IS NULL AND id > ? ORDER BY id LIMIT 101').bind(cursor).all()
+    const items = rows.results.slice(0, 100)
+    return jsonResponse({ items: items.map(row => productFromRow(row)), nextCursor: rows.results.length > 100 ? items.at(-1).id : null })
+  }
   if (url.pathname === '/api/catalog/search') {
     return request.method === 'GET' ? pickerSearch(request, env) : methodNotAllowed(['GET'])
   }

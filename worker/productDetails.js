@@ -5,7 +5,7 @@ export async function handleProductDetails(request, env, user) {
   const match = new URL(request.url).pathname.match(/^\/api\/(admin|catalog)\/products\/([\w-]+)(?:\/(image))?$/)
   if (!match) return null
   const [, scope, id, image] = match
-  if (id === 'import') return null
+  if (id === 'import' || id === 'export') return null
   if ((scope === 'admin' || request.method !== 'GET') && user.role !== 'admin') return jsonResponse({ error: 'Нужны права администратора.' }, 403)
   const row = await env.DB.prepare('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL').bind(id).first()
   if (!row) return jsonResponse({ error: 'Товар не найден.' }, 404)

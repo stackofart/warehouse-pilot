@@ -1,10 +1,21 @@
 import { jsonResponse, readJson, methodNotAllowed } from './http.js'
 import { permittedOrder } from './orders.js'
+import { decodeReportPhoto, readReportPhoto } from './reportPhoto.js'
 const fail = (error, status = 400) => jsonResponse({ error }, status)
-const present = row => ({ id: row.id, orderId: row.order_id, productId: row.product_id, sku: row.sku, barcode: row.barcode, name: row.product_name, address: row.address, suggestedAddress: row.suggested_address, kind: row.kind, note: row.note, status: row.status, author: row.author_name || '', updatedBy: row.updated_name || '', version: row.version, createdAt: row.created_at, updatedAt: row.updated_at })
+const present = row => ({ id: row.id, orderId: row.order_id, productId: row.product_id, sku: row.sku, barcode: row.barcode, name: row.product_name, address: row.address, suggestedAddress: row.suggested_address, kind: row.kind, note: row.note, status: row.status, author: row.author_name || '', updatedBy: row.updated_name || '', version: row.version, createdAt: row.created_at, updatedAt: row.updated_at, photoUrl: row.photo_key ? `/api/reports/${row.id}/photo` : undefined })
 
 export async function handleReportsRequest(request, env, user) {
   const url = new URL(request.url)
+  const photo = url.pathname.match(/^\/api\/reports\/([\w-]+)\/photo$/)
+  if (photo) return readReportPhoto(request, env, user, photo[1])
+  if (url.pathname === '/api/reports/notifications') {
+    if (user.role !== 'admin') return fail('Нужны права администратора.', 403)
+    if (request.method !== 'GET') return methodNotAllowed(['GET'])
+    const where = "status NOT IN ('resolved', 'rejected')"
+    const count = await env.DB.prepare(`SELECT count(*) AS total FROM reports WHERE ${where}`).first()
+    const latest = await env.DB.prepare(`SELECT id, product_name, kind, created_at FROM reports WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT 1`).first()
+    return jsonResponse({ total: count.total, latest: latest ? { id: latest.id, name: latest.product_name, kind: latest.kind } : null })
+  }
   if (url.pathname === '/api/reports') {
     if (request.method === 'GET') {
       // Pickers only receive alerts for products in an order assigned to them.
@@ -28,16 +39,26 @@ export async function handleReportsRequest(request, env, user) {
     if (request.method !== 'POST') return methodNotAllowed(['GET', 'POST'])
     const parsed = await readJson(request)
     if (parsed.response) return parsed.response
-    const { id, orderId, row, kind, note, suggestedAddress } = parsed.body || {}
+    const { id, orderId, row, kind, note, suggestedAddress, photoDataUrl } = parsed.body || {}
     const order = await permittedOrder(env, user, orderId)
     if (!order || user.role === 'replenisher') return fail('Заказ вам не назначен.', 403)
     const item = JSON.parse(order.document_json).lines.find(line => line.row === row)
     if (!item || !['missing', 'moved', 'damaged', 'comment'].includes(kind) || typeof id !== 'string' || !/^[\w-]{16,100}$/.test(id)) return fail('Некорректное сообщение.')
     if (kind === 'moved' && !/^\d{1,2}\.?(?:[A-Z])$/i.test(suggestedAddress || '')) return fail('Укажите новый адрес, например 24.F.')
+    const existing = await env.DB.prepare('SELECT * FROM reports WHERE id = ?').bind(id).first()
+    if (existing) return existing.author_id === user.id && existing.order_id === orderId ? jsonResponse({ report: present(existing) }, 201) : fail('Идентификатор сообщения занят.', 409)
+    let attachment
+    try { attachment = decodeReportPhoto(photoDataUrl) } catch (error) { return fail(error.message) }
+    if (attachment && !env.PRODUCT_IMAGES) return fail('Хранилище фото недоступно. Сообщение с фото не отправлено.', 503)
+    const photoKey = attachment ? `reports/${id}/${crypto.randomUUID()}` : null
+    if (attachment) await env.PRODUCT_IMAGES.put(photoKey, attachment.bytes, { httpMetadata: { contentType: attachment.type } })
     const now = new Date().toISOString()
-    await env.DB.prepare(`INSERT INTO reports (id, order_id, product_id, sku, barcode, product_name, address, suggested_address, kind, note, author_id, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
-      .bind(id, orderId, item.productId, item.sku, item.barcode, item.name, item.address, typeof suggestedAddress === 'string' ? suggestedAddress.toUpperCase().replace(/^(\d+)\.?([A-Z])$/, '$1.$2') : null, kind, typeof note === 'string' ? note.trim().slice(0, 2000) : '', user.id, user.id, now, now).run()
+    try {
+      await env.DB.prepare(`INSERT INTO reports (id, order_id, product_id, sku, barcode, product_name, address, suggested_address, kind, note, author_id, updated_by, created_at, updated_at, photo_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
+        .bind(id, orderId, item.productId, item.sku, item.barcode, item.name, item.address, typeof suggestedAddress === 'string' ? suggestedAddress.toUpperCase().replace(/^(\d+)\.?([A-Z])$/, '$1.$2') : null, kind, typeof note === 'string' ? note.trim().slice(0, 2000) : '', user.id, user.id, now, now, photoKey).run()
+    } catch (error) { if (photoKey) await env.PRODUCT_IMAGES.delete(photoKey); throw error }
     const saved = await env.DB.prepare('SELECT * FROM reports WHERE id = ? AND author_id = ?').bind(id, user.id).first()
+    if (photoKey && saved?.photo_key !== photoKey) await env.PRODUCT_IMAGES.delete(photoKey)
     if (!saved) return fail('Идентификатор сообщения занят.', 409)
     return jsonResponse({ report: present(saved) }, 201)
   }

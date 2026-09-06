@@ -34,6 +34,9 @@ import { productsForOrders } from '../products/catalogRepository'
 import { getSyncedSession, flushSessions } from './sync'
 import { getReports, sendReport, reportStatus, type Report } from '../reports/api'
 import { prepareReportDraft } from '../reports/draft'
+import { ReportPhotoInput } from '../reports/ReportPhotoInput'
+import { OrderCompletion } from './OrderCompletion'
+import { formatMilliseconds } from './time'
 import type { RecognizedOrderItem } from '../recognition/ocr'
 import { optimizeOrderRoute } from '../routing/optimizer'
 import { buildWarehouseGraph } from '../warehouse/graph'
@@ -116,17 +119,6 @@ function uniqueOrderAddresses(order: SavedOrder) {
 
 function formatTime(value: string | null | undefined) {
   return value ? timeFormatter.format(new Date(value)) : '—'
-}
-
-function formatMilliseconds(milliseconds: number) {
-  const totalSeconds = Math.floor(milliseconds / 1_000)
-  const seconds = totalSeconds % 60
-  const totalMinutes = Math.floor(totalSeconds / 60)
-  const minutes = totalMinutes % 60
-  const hours = Math.floor(totalMinutes / 60)
-  return hours
-    ? `${hours} ч ${String(minutes).padStart(2, '0')} мин ${String(seconds).padStart(2, '0')} сек`
-    : `${minutes} мин ${String(seconds).padStart(2, '0')} сек`
 }
 
 function formatActiveDuration(session: FulfillmentSession, start: string | null | undefined, end: string | null | undefined, now: number) {
@@ -277,6 +269,8 @@ export function OrderWorkflow() {
   const [reportKinds, setReportKinds] = useState<Record<number, Report['kind']>>({})
   const [reportAddresses, setReportAddresses] = useState<Record<number, string>>({})
   const [reportFeedback, setReportFeedback] = useState<Record<number, string>>({})
+  const [reportPhotos, setReportPhotos] = useState<Record<number, string>>({})
+  const [photoBusy, setPhotoBusy] = useState(false)
   const [reports, setReports] = useState<Report[]>([])
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
@@ -321,7 +315,7 @@ export function OrderWorkflow() {
     setReportDrafts({})
     setReportKinds({})
     setReportAddresses({})
-    setReportFeedback({})
+    setReportFeedback({}); setReportPhotos({}); setPhotoBusy(false)
     setFastFilter('all')
     if (!order) {
       setSession(null)
@@ -512,7 +506,8 @@ export function OrderWorkflow() {
 
   const saveFastItemReport = async (row: number) => {
     if (!session || session.status !== 'in-progress') return
-    const draft = prepareReportDraft(reportKinds[row] || 'comment', reportDrafts[row] || '', reportAddresses[row])
+    if (photoBusy || isSaving) return
+    const draft = prepareReportDraft(reportKinds[row] || 'comment', reportDrafts[row] || '', reportAddresses[row], Boolean(reportPhotos[row]))
     if (draft.error) {
       setReportFeedback(current => ({ ...current, [row]: draft.error }))
       return
@@ -522,12 +517,13 @@ export function OrderWorkflow() {
     setIsSaving(true)
     if (order) {
       try {
-        const pending = await sendReport({ id: crypto.randomUUID(), orderId: order.id, row, kind: draft.kind, note: draft.note, suggestedAddress: draft.suggestedAddress })
+        const pending = await sendReport({ id: crypto.randomUUID(), orderId: order.id, row, kind: draft.kind, note: draft.note, suggestedAddress: draft.suggestedAddress, ...(reportPhotos[row] ? { photoDataUrl: reportPhotos[row] } : {}) })
         setReportFeedback(current => ({ ...current, [row]: pending ? 'Сохранено на устройстве · отправим при подключении.' : draft.kind === 'moved' ? 'Адрес отправлен администратору на подтверждение.' : draft.kind === 'missing' ? 'Сообщение отправлено на проверку резерва.' : 'Сообщение отправлено.' }))
         const next = draft.kind === 'missing' ? updateFulfillmentItem(session, row, 'missing') : draft.note ? updateFulfillmentItemNote(session, row, draft.note) : session
         if (next !== session) { setSession(await saveFulfillmentSession(next)); setNow(Date.now()) }
         if (!pending) setReports(await getReports(order.id))
         setReportDrafts(current => ({ ...current, [row]: '' }))
+        setReportPhotos(current => ({ ...current, [row]: '' }))
         setFastActionRow(null)
       } catch (reason) { setReportFeedback(current => ({ ...current, [row]: reason instanceof Error ? reason.message : 'Не удалось отправить сообщение.' })) }
       finally { setIsSaving(false) }
@@ -602,8 +598,9 @@ export function OrderWorkflow() {
   if (!order) return <div className="page"><div className="orders-empty"><ClipboardList size={29} /><strong>Заказ не найден или не назначен вам</strong><a className="primary-button" href="#orders">К моим заказам</a></div></div>
 
   return (
-    <div className={`page workflow-page ${workflowMode === 'fast' && session ? 'active-fast-work' : ''}`}>
-      {workflowMode === 'fast' && session && <nav className="compact-work-links" aria-label="Быстрые действия заказа"><a href="#orders">← Заказы</a><a href={`#pallet/${encodeURIComponent(order.id)}`}>Паллета</a><a href="#work-finish" onClick={event => { event.preventDefault(); document.getElementById('work-finish')?.scrollIntoView({ block: 'end', behavior: 'smooth' }) }}>К завершению ↓</a></nav>}
+    <div className={`page workflow-page ${workflowMode === 'fast' && session ? 'active-fast-work' : ''} ${isSaving && session?.status === 'in-progress' ? 'saving-mark' : ''}`}>
+      {session?.status === 'completed' && <OrderCompletion session={session} orderNumber={order.orderNumber} />}
+      {workflowMode === 'fast' && session && session.status !== 'completed' && <nav className="compact-work-links" aria-label="Быстрые действия заказа"><a href="#orders">← Заказы</a><a href={`#pallet/${encodeURIComponent(order.id)}`}>Паллета</a><a href="#work-finish" onClick={event => { event.preventDefault(); document.getElementById('work-finish')?.scrollIntoView({ block: 'end', behavior: 'smooth' }) }}>К завершению ↓</a></nav>}
       {session?.syncStatus && session.syncStatus !== 'synced' && <div className="operations-sync" role="status"><span>{session.syncStatus === 'conflict' ? session.syncError || 'Конфликт синхронизации' : 'Сохранено на устройстве · ожидает отправки'}</span><button onClick={() => void flushSessions().then(async () => setSession(await getFulfillmentSession(order.id) || null))}>Синхронизировать</button>{session.syncStatus === 'conflict' && <button onClick={() => { if (confirm('Заменить локальный прогресс серверной версией? Несинхронизированные отметки будут удалены.')) void getSyncedSession(order.id, true).then(value => setSession(value || null)).catch(reason => setError(String(reason))) }}>Принять серверную версию</button>}</div>}
       <div className="page-heading workflow-heading">
         <div><p className="eyebrow">РАБОЧИЙ РЕЖИМ</p><h1>{workflowMode === 'fast' ? 'Сборка заказа' : 'Заказ: маршрут и сборка'}</h1><p>{workflowMode === 'fast' ? 'Отмечайте собранное по ходу работы или подтвердите всё вместе в конце. Кнопка «Сообщить» — для замечаний.' : 'Отмечайте результат по товару — прибытие и остановки фиксируются автоматически.'}</p></div>
@@ -782,8 +779,9 @@ export function OrderWorkflow() {
                   {reportKinds[item.row] === 'moved' && <label className="fast-report-field"><span>Где находится товар</span><input aria-label="Фактический адрес товара" autoCapitalize="characters" autoComplete="off" placeholder="Например, 24.F" value={reportAddresses[item.row] || ''} onChange={event => setReportAddresses(current => ({ ...current, [item.row]: event.target.value }))} /><small>Новый адрес проверит и подтвердит администратор.</small></label>}
                   {reportKinds[item.row] === 'missing' && <p className="report-help">Сообщение попадёт на проверку резерва и пополнение.</p>}
                   <label className="fast-report-comment"><span>Комментарий{reportKinds[item.row] && reportKinds[item.row] !== 'comment' ? ' · необязательно' : ''}</span><textarea value={reportDrafts[item.row] || ''} maxLength={500} placeholder="Дополнительные подробности" onChange={event => setReportDrafts(current => ({ ...current, [item.row]: event.target.value }))} /></label>
+                  <ReportPhotoInput value={reportPhotos[item.row]} onChange={data => setReportPhotos(current => ({ ...current, [item.row]: data }))} onBusy={setPhotoBusy} disabled={!canHandle} />
                   {reportFeedback[item.row] && <p className="report-feedback" role="status">{reportFeedback[item.row]}</p>}
-                  <div className="report-submit-actions"><button type="submit" className="report-send-button" disabled={!canHandle}>{isSaving ? 'Отправляем…' : 'Отправить сообщение'}</button><button type="button" className="checking-button" disabled={!canHandle} aria-pressed={status === 'checking'} onClick={() => void setFastItemStatus(item.row, 'checking')}><ShieldCheck size={16} />{status === 'checking' ? 'Отменить проверку' : 'Идёт проверка'}</button>{status !== 'pending' && <button type="button" className="reset-button" disabled={!canHandle} onClick={() => void setFastItemStatus(item.row, 'pending')}><Undo2 size={16} />Сбросить отметку</button>}</div>
+                  <div className="report-submit-actions"><button type="submit" className="report-send-button" disabled={!canHandle || photoBusy}>{isSaving ? 'Отправляем…' : 'Отправить сообщение'}</button></div>
                 </form>}
                 {!actionOpen && reportFeedback[item.row] && <p className="report-feedback" role="status">{reportFeedback[item.row]}</p>}
               </article>
